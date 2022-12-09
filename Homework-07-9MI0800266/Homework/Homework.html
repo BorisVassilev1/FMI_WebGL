@@ -1,0 +1,284 @@
+﻿<!DOCTYPE html>
+
+<head>
+	<meta charset="utf-8"/>
+	<title>Люлката</title>
+
+	<script src="webgl-fmi.js"></script>
+	
+	<script id="vshader" type="x-shader/x-vertex">
+		uniform mat4 uProjectionMatrix;
+		uniform mat4 uViewMatrix;
+		uniform mat4 uModelMatrix;
+		
+		uniform bool uUseAmbient;
+		uniform vec3 uAmbientColor;
+
+		uniform bool uUseDiffuse;
+		uniform vec3 uDiffuseColor;
+
+		uniform vec3 uLightDir;
+		
+		attribute vec3 aXYZ;		// координати на връх
+		attribute vec3 aColor;		// цвят на връх
+		attribute vec3 aNormal;		// нормален вектор на връх
+
+		varying vec3 vNormal;
+		varying vec3 vColor;
+		varying vec3 vPos;
+		
+		void main ()
+		{
+			mat4 mvMatrix = uViewMatrix * uModelMatrix;
+			vec4 pos = mvMatrix * vec4(aXYZ,1);
+			gl_Position = uProjectionMatrix * pos;
+
+			// околна светлина
+			vColor = aColor;
+			if (uUseAmbient)
+				vColor *= uAmbientColor;
+			
+			// дифузно отражение
+			vec3 normal = vec3(normalize(mvMatrix*vec4(aNormal,0)));
+			vec3 light = normalize(-uLightDir);
+			if (uUseDiffuse)
+				vColor += aColor*uDiffuseColor*max(dot(normal,light),0.0);
+
+			vPos = pos.xyz/pos.w;
+			vNormal = normal;
+		}
+	</script>
+	
+	<script id="fshader" type="x-shader/x-fragment">
+		precision mediump float;
+
+		// преместено тук от другия шейдър
+		uniform highp vec3 uLightDir;
+		uniform bool uUseSpecular;
+		uniform vec3 uSpecularColor;
+
+		varying vec3 vNormal;
+		varying vec3 vColor;
+		varying vec3 vPos;
+
+		void main( )
+		{
+			vec3 light = normalize(-uLightDir);
+			
+			// намиране на отразения лъч
+			vec3 reflectedLight = normalize(reflect(light,normalize(vNormal)));
+
+			// в локалната координатна система "окото" на гледащия е в (0,0,0)
+			// а вектора от точката до "окото" е pos-(0,0,0) = pos
+			vec3 viewDir = normalize(vPos);
+
+			// готови сме да сметнем лъскавината
+			float cosa = abs(dot(reflectedLight,viewDir));
+			vec3 specularColor = vec3(pow(cosa,4.0));
+			
+			gl_FragColor = vec4(vColor+specularColor,1);
+		}
+	</script>
+
+	<script>
+		function start( )
+		{
+			var	canvas = document.getElementById("picasso");
+			canvas.addEventListener('webglcontextlost',function(event){event.preventDefault();},false);
+			canvas.addEventListener('webglcontextrestored',function(){init();},false);
+
+			init();
+			drawFrame();
+		}
+		
+		function init()
+		{
+			gl = getContext("picasso");
+			glprog = getProgram("vshader","fshader");
+
+			
+			aXYZ = gl.getAttribLocation(glprog,"aXYZ");
+			uProjectionMatrix = gl.getUniformLocation(glprog,"uProjectionMatrix");
+			uViewMatrix = gl.getUniformLocation(glprog,"uViewMatrix");
+			uModelMatrix = gl.getUniformLocation(glprog,"uModelMatrix");
+
+			aColor = gl.getAttribLocation(glprog,"aColor");
+			uAmbientColor = gl.getUniformLocation(glprog,"uAmbientColor");
+			uUseAmbient   = gl.getUniformLocation(glprog,"uUseAmbient");
+
+			aNormal = gl.getAttribLocation(glprog,"aNormal");
+			uDiffuseColor = gl.getUniformLocation(glprog,"uDiffuseColor");
+			uUseDiffuse = gl.getUniformLocation(glprog,"uUseDiffuse");
+			uUseSpecular = gl.getUniformLocation(glprog,"uUseSpecular");
+			uLightDir = gl.getUniformLocation(glprog,"uLightDir");
+
+			gl.enable(gl.DEPTH_TEST);
+			gl.clearColor(0.8,0.9,0.7,1);
+
+			identity();
+			perspective(30,gl.canvas.width/gl.canvas.height,1,40000);
+
+			gl.uniform3f(uAmbientColor,0.7,0.7,0.7);
+			gl.uniform1i(uUseAmbient,true);
+
+			gl.uniform3f(uDiffuseColor,1,1,1);
+			gl.uniform1i(uUseDiffuse,true);
+			
+			gl.uniform3f(uLightDir,0,-1,-0.3);
+
+			// обектите, съставящи люлката на Нютон,
+			// могат да бъдат създадени тук:
+			// ...
+
+			objects = [];
+			
+			let base = new Cuboid([0,0,-10], [20, 20, 1]);
+			base.color = [0.5, 0.5, 0.5];
+			objects.push(base);
+			
+			// модифицирах класа за цилиндър да приема и ротация като незадължителен параметър
+			let c1 = new Cylinder([-10, 10, -10],0.5,20, [0,30,0]);
+			c1.color = [0.7, 0.7, 0.7];
+			objects.push(c1);
+			let c2 = new Cylinder([10, 10, -10],0.5,20, [0,-30,0]);
+			c2.color = [0.7, 0.7, 0.7];
+			objects.push(c2);
+			let c3 = new Cylinder([-10, -10, -10],0.5,20, [0,30,0]);
+			c3.color = [0.7, 0.7, 0.7];
+			objects.push(c3);
+			let c4 = new Cylinder([10, -10, -10],0.5,20, [0,-30,0]);
+			c4.color = [0.7, 0.7, 0.7];
+			objects.push(c4);
+			
+			let leg11 = new Sphere([-10, -10, -10], 1.5);
+			leg11.color = [0,0,0];
+			objects.push(leg11);
+			let leg12 = new Cylinder([-10, -10, -12], 1.5, 2);
+			leg12.color = [0,0,0];
+			objects.push(leg12);
+
+			let leg21 = new Sphere([10, -10, -10], 1.5);
+			leg21.color = [0,0,0];
+			objects.push(leg21);
+			let leg22 = new Cylinder([10, -10, -12], 1.5, 2);
+			leg22.color = [0,0,0];
+			objects.push(leg22);
+
+			let leg31 = new Sphere([-10, 10, -10], 1.5);
+			leg31.color = [0,0,0];
+			objects.push(leg31);
+			let leg32 = new Cylinder([-10, 10, -12], 1.5, 2);
+			leg32.color = [0,0,0];
+			objects.push(leg32);
+
+			let leg41 = new Sphere([10, 10, -10], 1.5);
+			leg41.color = [0,0,0];
+			objects.push(leg41);
+			let leg42 = new Cylinder([10, 10, -12], 1.5, 2);
+			leg42.color = [0,0,0];
+			objects.push(leg42);
+
+			let top1 = new Sphere([0, 10, 10*Math.sqrt(3) - 10], 0.5);
+			top1.color = [0.7, 0.7, 0.7];
+			objects.push(top1);
+			let top2 = new Sphere([0, -10, 10*Math.sqrt(3) - 10], 0.5);
+			top2.color = [0.7, 0.7, 0.7];
+			objects.push(top2);
+
+			BALL_SIZE = 1.5;
+
+			ballComposite = [];
+			rotationCenter = [0,0,10*Math.sqrt(3) - 10];
+			let ball = new Sphere([0,0,-10], BALL_SIZE);
+			ballComposite.push(ball);
+
+			CONE_SIDES = 5;
+			let cone1 = new Cone([0, 0, -10], 0.1, 10 * Math.sqrt(2), [45,0,0]);
+			cone1.color = [0,0,0];
+			ballComposite.push(cone1);
+
+			let cone2 = new Cone([0, 0, -10], 0.1, 10 * Math.sqrt(2), [-45,0,0]);
+			cone2.color = [0,0,0];
+			ballComposite.push(cone2);
+
+			drawBall = function (rotation, color = [1.,0.5,0]) {
+				pushMatrix();
+				translate(rotationCenter);
+				yRotate(rotation);
+				ballComposite[0].color = color;
+				for(o of ballComposite) {
+					o.draw();
+				}
+				popMatrix();
+			}
+
+			ballRotations = [];
+			degreesPerBall = Math.asin(BALL_SIZE * 2 / 10) * 180 / Math.PI;
+			for(let i =0; i < n; ++ i) {
+				ballRotations.push((i - (n-1)/2) * degreesPerBall);
+			}
+
+			clamp = (num, min, max) => Math.min(Math.max(num, min), max);
+
+			colors = [[0.6, 0.6, 0.6], [1, 0.5, 0]];
+		}
+
+		var frame = 0;
+	
+		var n = 8; // брой топки
+		
+		function drawFrame()
+		{
+			frame++;
+			gl.clear(gl.COLOR_BUFFER_BIT+gl.DEPTH_BUFFER_BIT);
+
+			lookAt([70*Math.cos(frame/300),70*Math.sin(frame/300),0], [0,0,0], [0,0,1]);
+
+			// рисуване на стойката
+			// ...
+			for(let i of objects) {
+				i.draw();
+			}
+			
+			
+			// няма да е най-реалистичното движение
+
+			PERIOD = 20;
+			let phase = Math.sin(frame / PERIOD);
+			let centerOfMassOffset = clamp(phase * 10, -1, 1) * degreesPerBall / 2;
+
+			// рисуване на n топки
+			for (var i=0; i<n; i++)
+			{
+				let jumpOffset;
+				let exponent;
+				let direction = Math.sign(phase);
+				if(phase > 0) {
+					exponent = Math.exp((i - n + 3 - 0.5) * 2.7)
+				}
+				else {
+					exponent = Math.exp((2-i - 0.5) * 2.7);
+				}
+				let absPhase = Math.abs(phase);
+
+				jumpOffset = clamp(absPhase, 0, 1) * direction * exponent;
+
+				drawBall(ballRotations[i] + centerOfMassOffset + jumpOffset, colors[i % 2]);
+			}
+			
+			requestAnimationFrame(drawFrame);
+		}
+	</script>	
+</head>
+
+<body onload="start()">
+	<h2>Люлката</h2>
+
+	<noscript>
+		Искаме JavaScript, но няма!
+	</noscript>
+	
+	<canvas id="picasso" width="600" height="400" style="border: solid;">
+		Искаме canvas, но няма!
+	</canvas>
+</body>

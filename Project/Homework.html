@@ -45,7 +45,13 @@
 			
 			document.addEventListener("keyup", (e) => {
 				isKeyPressed[e.key] = false;
-				// console.log(e.key);
+			});
+		
+			mousePos = [0,0];
+			prevMousePos = [0,0];
+			mouseDelta = [0,0];
+			picasso.addEventListener("mousemove", (e) => {
+				mousePos = [e.x, e.y];
 			});
 
 			floor = [];
@@ -68,7 +74,7 @@
 			
 			var a = time/3;
 			// lookAt([30*cos(a),30*sin(a),20],[0,0,1],[0,0,1]);
-			lookAt([60, 0, 40], [0,0,1], [0,0,1]);
+			// lookAt([60, 0, 40], [0,0,1], [0,0,1]);
 			let r = -robot.rot / 180 * Math.PI;
 			lookAt([
 				30 * cos(r) + robot.pos[0], 
@@ -76,6 +82,10 @@
 				20 + robot.pos[2]], 
 				robot.pos, [0,0,1]);
 
+			
+			mouseDelta = [mousePos[0] - prevMousePos[0], mousePos[1] - prevMousePos[1]];
+			prevMousePos = [mousePos[0], mousePos[1]];
+			
 			moveRobot();
 			
 			for(c of floor) c.draw();
@@ -87,6 +97,8 @@
 
 		function moveRobot() {
 			let speed = 0.1;
+
+			robot.rot += mouseDelta[0] * 2.0;
 
 			if(isKeyPressed['ArrowLeft']) {
 				robot.rot -= 10. * speed;

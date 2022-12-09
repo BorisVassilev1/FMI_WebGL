@@ -163,8 +163,7 @@ IKLeg.prototype.startMove = function(newTarget) {
 IKLeg.prototype.draw = function() {
 	
 	if(this.moveTimer >= 0) {
-		-- this.moveTimer;
-		if(this.moveTimer > 0) {
+		// if(this.moveTimer > 0) {
 			let t = this.moveTimer / this.moveInterval;
 			this.target = [
 				this.oldTarget[0] * (t) + this.newTarget[0] * (1. - t),
@@ -172,8 +171,9 @@ IKLeg.prototype.draw = function() {
 				this.oldTarget[2] * (t) + this.newTarget[2] * (1. - t),
 			]
 
-			this.target[2] += (this.moveTimer - this.moveInterval / 2) / this.moveInterval;
-		}
+			this.target[2] += t;
+		// }
+		-- this.moveTimer;
 	}
 	if(this.moveTimer == 0) {
 		this.parent.isMovingLeg = false;
@@ -233,7 +233,7 @@ Robot.prototype.draw = function(t) {
 
 	pushMatrix();
 	translate(this.pos);
-	translate([0,0,2]);
+	translate([0,0,1.5]);
 	zRotate(this.rot);
 	this.base.draw();
 
@@ -256,10 +256,12 @@ Robot.prototype.draw = function(t) {
 	
 	// difference in rotation
 	let deltaR = this.rot - this.prevRot;
-	if(Math.abs(deltaR) > 1) deltaR = 0;
 
 	let dr = deltaR / 180 * Math.PI;
 
+	let biggestDistance = 1.0; 
+	let legToMove = -1;
+	let legMoveDist = null;
 	for(i in this.legs) {
 		// correct leg targets based on position
 		let t = this.legs[i].target;
@@ -275,7 +277,7 @@ Robot.prototype.draw = function(t) {
 
 		this.legs[i].target[0] += rotDist[0];
 		this.legs[i].target[1] += rotDist[1];
-
+		
 		if(!this.isMovingLeg) {
 			let dist = [
 				this.targets[i][0] - this.legs[i].target[0],
@@ -285,17 +287,27 @@ Robot.prototype.draw = function(t) {
 			let distLen = Math.sqrt(
 				dist[0] * dist[0] + 
 				dist[1] * dist[1] + 
-				dist[2] * dist[2]);
+				dist[2] * dist[2]
+				);
 
-			if(distLen > 1.5 && !this.isMovingLeg) {
-				let newTarget = target = [
-					this.legs[i].target[0] + 1.2 * dist[0],
-					this.legs[i].target[1] + 1.2 * dist[1],
-					this.legs[i].target[2] + 1.2 * dist[2],
-				];
-				this.legs[i].startMove(newTarget);
+			if(distLen > biggestDistance) {
+				biggestDistance = distLen;
+				legToMove = i;
+				legMoveDist = dist;
 			}
 		}
+	}
+
+	if(!this.isMovingLeg && legToMove != -1) {
+		let newTarget = target = [
+			this.legs[legToMove].target[0] + 1.0 * legMoveDist[0],
+			this.legs[legToMove].target[1] + 1.0 * legMoveDist[1],
+			this.legs[legToMove].target[2] + 1.0 * legMoveDist[2],
+		];
+		this.legs[legToMove].startMove(newTarget);
+	}
+
+	for(i in this.legs) {
 		this.legs[i].draw();
 	}
 

@@ -1,0 +1,202 @@
+﻿<!DOCTYPE html>
+
+<head>
+	<meta charset="utf-8"/>
+	<title>Чергата</title>
+
+	<script src="webgl-fmi.js"></script>
+
+	<script id="vshader" type="x-shader/x-vertex">
+		precision mediump float;
+		// няма gl_VertexID, нито пък int атрибути
+		// другия път вероятно ще използвам #version 300 es
+		// от самото начало
+		attribute float aVertexID;
+		varying vec3 vRGB;
+		varying float vLeftOrRight;
+		varying float vStripWidth;
+
+		uniform float uMinFrequency;
+		uniform float uMaxFrequency;
+		uniform float uStripWidth;
+		uniform int uDetail;
+		uniform float uRandomSeed;
+		uniform float uWaviness;
+		uniform float uMoldingWidth;
+
+		// доста импровизирано генериране на случайно число, ама ще работи.
+		float getFloat(inout float seed) {
+			float res = fract(sin(dot(vec2(seed, 1.)* seed, vec2(12.9898, 78.233))) * 43758.5453);
+			seed += res;
+			return res;
+		}
+
+		float getFloat(inout float seed, in float min, in float max) {
+			return mix(min, max, getFloat(seed));
+		}
+
+		// моето предложение за "млечен" цвят е кой да е цвят, размесен с бая доста бяла боя
+		vec3 milkyColor(inout float seed) {
+			return mix(vec3(getFloat(seed), getFloat(seed), getFloat(seed)), vec3(1.0), 0.6);
+		}
+		
+		void main ()
+		{
+			// трябват по 2 допълнителни върха за всяка лентичка
+			float stripID = floor(aVertexID / float(uDetail + 2) + 0.001); // floating point грешки изглежда
+			float vertexInStrip = aVertexID - stripID * float(uDetail + 2);
+			float positionAlongLine = floor(vertexInStrip / 2.) * 2. / float(uDetail);
+			// -1 или 1 в зависимост от четността
+			float leftOrRight = mod(vertexInStrip, 2.) * 2. - 1.;
+
+			// смята координатите и на лявата, и на дясната точка
+			// ще е нужно за ширината на лентата
+			float seedLeft = floor(stripID - 1. + 0.001) + uRandomSeed; 
+			// при изваждането на 1 изглежда се случваха precission грешки
+			// и за това се разминаваха ивиците.
+			// тези проблеми ги нямаше на лаптопа, на който писах домашното първоначално
+			float seedRight = stripID + uRandomSeed;
+			float frequencyLeft = getFloat(seedLeft, uMinFrequency, uMaxFrequency);
+			float frequencyRight = getFloat(seedRight, uMinFrequency, uMaxFrequency);
+
+			float sinLeft = sin(positionAlongLine * frequencyLeft) * uWaviness;
+			float sinRight = sin(positionAlongLine * frequencyRight) * uWaviness;
+
+			// после избира едната измежду двете
+			float sinX = mix(sinLeft, sinRight, leftOrRight * 0.5 + 0.5);
+
+			float sineWidth = uStripWidth / 2.;
+
+			gl_Position = vec4(
+
+				sinX * sineWidth + 				// основна вълна
+				sineWidth * leftOrRight + 		// лява или дясна страна
+				uStripWidth * (stripID * (1. + uMoldingWidth))	// поредна ивица
+				- 1.0,							// всичко започва в ъгъла на екрана
+
+				positionAlongLine * 2. - 1., 	// [0, 1] -> [-1, 1]
+				0, 1.0);
+			
+			vLeftOrRight = leftOrRight;
+			vRGB = milkyColor(seedRight);
+			
+			// мноого шарена черга
+			//float seed = aVertexID / float(uDetail);
+			//vRGB = milkyColor(seed);
+
+			// смята се ширината на лентата в [0, 1]
+			vStripWidth = (2. + (-sinLeft + sinRight)) / (2. + 2. * uWaviness);
+		}
+	</script>
+
+	<script id="fshader" type="x-shader/x-fragment">
+		precision mediump float;
+		varying vec3 vRGB;
+		varying float vLeftOrRight;
+		varying float vStripWidth;
+
+		uniform float uDoOutline;
+		uniform float uStripWidth;
+		uniform vec3 uOutlineColor;
+		uniform float uOutlineWidth;
+
+		void main( )
+		{
+			// избираме хубава дабелина за контурите, която да не зависи от дебелината на
+			// лентите.
+			float outlineWidth = uOutlineWidth / uStripWidth;
+
+			// в по-дебелите участъци от лентата контура е по-тънък като част от лентата
+			float threshold = 1. - outlineWidth / vStripWidth;
+			
+			// двата края на лентата получават контур
+			float isOutline = step(threshold, vLeftOrRight) + step(vLeftOrRight, -threshold);
+
+			// може да се изключват контурите или да се контролира
+			// тяхната "прозрачност".
+			isOutline *= uDoOutline;
+			gl_FragColor = vec4(mix(vRGB, uOutlineColor, isOutline), 1.0);
+		}
+	</script>
+
+	<script>
+		function start( )
+		{
+			gl = getContext("picasso");
+			glprog = getProgram("vshader","fshader");
+
+			aVertexID = gl.getAttribLocation(glprog,"aVertexID");
+
+			uMinFrequency = gl.getUniformLocation(glprog, "uMinFrequency");
+			uMaxFrequency = gl.getUniformLocation(glprog, "uMaxFrequency");
+			uStripWidth = gl.getUniformLocation(glprog, "uStripWidth");
+			uDetail = gl.getUniformLocation(glprog, "uDetail");
+			uRandomSeed = gl.getUniformLocation(glprog, "uRandomSeed");
+			uDoOutline = gl.getUniformLocation(glprog, "uDoOutline");
+			uOutlineColor = gl.getUniformLocation(glprog, "uOutlineColor");
+			uWaviness = gl.getUniformLocation(glprog, "uWaviness");
+			uOutlineWidth = gl.getUniformLocation(glprog, "uOutlineWidth");
+			uMoldingWidth = gl.getUniformLocation(glprog, "uMoldingWidth");
+
+			// триъгълниците м-у отделните ленти ще бъдат наобратно
+			// и не искам да се рисуват
+			gl.enable(gl.CULL_FACE);
+			gl.cullFace(gl.BACK);
+
+			// фона ще си е бял
+			gl.clearColor(1,1,1,1);
+			gl.clear(gl.COLOR_BUFFER_BIT);
+
+			let m = 10;							// брой ленти m
+			let detail = 100;					// детайлност. трябва да е четно число
+			let minFrequency = 2;				// честота
+			let maxFrequency = 20;
+			let doOutline = 1.0;				// сила на контурите
+			let outlineColor = [0., 0., 0.];	// цвят на контурите
+			let outlineWidth = 0.005; 			// дебелина на контура (отнася се към размера на екрана)
+			let moldingWidth = 0.2;				// колко вълниста е чергата
+			let waviness = 0.9;					// дебелина на лайсната относно ширината на лентите
+
+			let data = [];
+			let vertexCount = (detail + 2) * m;
+			let stripWidth = 2.0 / (m - 1) / (1. + moldingWidth);
+
+			// в паметта отива само поредица от естествени числа
+			for(let i = 0; i < vertexCount; i ++) {
+				data.push(i);
+			}
+
+			var vBuf = gl.createBuffer();
+			gl.bindBuffer(gl.ARRAY_BUFFER,vBuf);
+			gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.STATIC_DRAW);
+
+			// пращане на данни към GL
+			gl.enableVertexAttribArray(aVertexID);
+			gl.vertexAttribPointer(aVertexID,1,gl.FLOAT,false,0,0);
+			gl.uniform1f(uStripWidth, stripWidth);
+			gl.uniform1i(uDetail, detail);
+			gl.uniform1f(uRandomSeed, Math.random());			
+			gl.uniform1f(uMinFrequency, minFrequency);
+			gl.uniform1f(uMaxFrequency, maxFrequency);		
+			gl.uniform1f(uDoOutline, doOutline);			
+			gl.uniform3f(uOutlineColor, outlineColor[0], outlineColor[1], outlineColor[2]);	
+			gl.uniform1f(uOutlineWidth, outlineWidth);		
+			gl.uniform1f(uWaviness, waviness);
+			gl.uniform1f(uMoldingWidth, moldingWidth);
+
+			gl.drawArrays(gl.TRIANGLE_STRIP,0,vertexCount); // единствено рисуване.
+		}
+	</script>
+</head>
+
+<body onload="start()">
+	<h2>Чергата</h2>
+
+	<noscript>
+		Искаме JavaScript, но няма!
+	</noscript>
+
+	<canvas id="picasso" width="600" height="400" style="border: solid;">
+		Искаме canvas, но няма!
+	</canvas>
+</body>
