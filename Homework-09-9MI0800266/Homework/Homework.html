@@ -1,0 +1,285 @@
+﻿<!DOCTYPE html>
+
+<head>
+	<meta charset="utf-8" />
+	<title>Вирусът</title>
+
+	<script src="webgl-fmi.js"></script>
+	<script src="shaders.js"></script>
+
+	<script>
+		
+		// базисни функции
+		var B = [];
+		B[0] = function (t) { return (1-t)*(1-t)*(1-t); }
+		B[1] = function (t) { return 3*(1-t)*(1-t)*t; }
+		B[2] = function (t) { return 3*(1-t)*t*t; }
+		B[3] = function (t) { return t*t*t; }
+		// производни на базисни функции
+		var N = [];
+		N[0] = function (t) { return -3*t*t+6*t-3; }
+		N[1] = function (t) { return 9*t*t-12*t+3; }
+		N[2] = function (t) { return -9*t*t+6*t; }
+		N[3] = function (t) { return 3*t*t; }
+		
+		var BEZIER_POINTS = 10;
+		
+		// повърхност на Безие - конструктор
+		function BezierSurface()
+		{
+			this.data = [];
+			for (var i=0; i<2*BEZIER_POINTS*(BEZIER_POINTS-1); i++)
+				this.data.push(0,0,0,0,0,0);
+			this.data = new Float32Array(this.data);
+			this.buf = gl.createBuffer();
+			gl.bindBuffer(gl.ARRAY_BUFFER,this.buf);
+			gl.bufferData(gl.ARRAY_BUFFER,this.data, gl.DYNAMIC_DRAW);
+			this.n = BEZIER_POINTS;
+			this.color = [1,0,0];
+		}
+
+		// повърхност на Безие - задаване на 4 контролни точки
+		BezierSurface.prototype.set = function(p)
+		{
+			var n = this.n;
+			
+			// изчислява координатите на точка от повърхността
+			function vertexAt(u,v)
+			{
+				u = u/(n-1);
+				v = v/(n-1);
+				
+				var q = [0,0,0];
+				for (var i=0; i<4; i++) // контролни точки по направление u
+				for (var j=0; j<4; j++) // контролни точки по направление v
+				for (var k=0; k<3; k++) // координати x,y,z
+					q[k] += B[i](u)*B[j](v)*p[i][j][k];
+				return q;
+			}
+			// изчислява нормалния вектор към точка от повърхността
+			function normalAt(u,v)
+			{
+				u = u/(n-1);
+				v = v/(n-1);
+				
+				var nu = [0,0,0];
+				var nv = [0,0,0];
+				for (var i=0; i<4; i++) // контролни точки по направление u
+				for (var j=0; j<4; j++) // контролни точки по направление v
+				for (var k=0; k<3; k++) // координати x,y,z
+				{
+					nu[k] += N[i](u)*B[j](v)*p[i][j][k];
+					nv[k] += B[i](u)*N[j](v)*p[i][j][k];
+				}
+				return unitVector(vectorProduct(nu,nv));
+			}
+			
+			// обхождане на кривата
+			var m=0;
+			for (var i=0; i<n-1; i++) // номер на лента
+			for (var j=0; j<n; j++) // номер на лента
+			{
+				var q;
+				q = vertexAt(i,j);
+				for (var k=0; k<3; k++) this.data[m++] = q[k];
+				q = normalAt(i,j);
+				for (var k=0; k<3; k++) this.data[m++] = q[k];
+				
+				q = vertexAt(i+1,j);
+				for (var k=0; k<3; k++) this.data[m++] = q[k];
+				q = normalAt(i+1,j);
+				for (var k=0; k<3; k++) this.data[m++] = q[k];
+			}
+			gl.bindBuffer(gl.ARRAY_BUFFER,this.buf);
+			gl.bufferSubData(gl.ARRAY_BUFFER,0,this.data);
+		}
+		
+		// повърхност на Безие - рисуване
+		BezierSurface.prototype.draw = function()
+		{
+			pushMatrix();
+				gl.vertexAttrib3fv(aColor,this.color);
+				useMatrix();
+				gl.bindBuffer(gl.ARRAY_BUFFER,this.buf);
+				gl.enableVertexAttribArray(aNormal);
+				gl.enableVertexAttribArray(aXYZ);
+
+				// рисуване на повърхнината
+				gl.vertexAttribPointer(aXYZ,3,gl.FLOAT,false,6*FLOATS,0*FLOATS);
+				gl.vertexAttribPointer(aNormal,3,gl.FLOAT,false,6*FLOATS,3*FLOATS);
+				for (var i=0; i<this.n-1; i++)
+					gl.drawArrays(gl.TRIANGLE_STRIP,2*this.n*i,2*this.n);
+			popMatrix();
+		}
+		
+		// повърхност на Безие - деструктор
+		BezierSurface.prototype.free = function()
+		{
+			gl.deleteBuffer(this.buf);
+		}
+
+
+		function start() {
+			var canvas = document.getElementById("picasso");
+			canvas.addEventListener('webglcontextlost', function (event) { event.preventDefault(); }, false);
+			canvas.addEventListener('webglcontextrestored', function () { init(); }, false);
+
+			init();
+			drawFrame();
+		}
+
+		function init() {
+			gl = getContext("picasso");
+			glprog = getProgram(vShader, fShader);
+			getVariables();
+
+			gl.enable(gl.DEPTH_TEST);
+			gl.clearColor(0.7, 0.7, 0.7, 1);
+
+			identity();
+			perspective(30, gl.canvas.width / gl.canvas.height, 1, 40000);
+			gl.uniform1i(uUseNormalMatrix, false);
+
+			gl.uniform3f(uAmbientColor, 0.6, 0.3, 0.3);
+			gl.uniform3f(uDiffuseColor, 1, 1, 1);
+			gl.uniform3f(uLightDir, 0, 0, -1);
+
+			startTime = time;
+
+			virus = [];
+
+			// математически функции за по-лесни сметки
+			let lerp = function (p1, p2, t) {
+				return [
+					p1[0] * (1. - t) + p2[0] * t,
+					p1[1] * (1. - t) + p2[1] * t,
+					p1[2] * (1. - t) + p2[2] * t,
+				];
+			}
+			let mid = function (p1, p2) {
+				return lerp(p1, p2, 0.5);
+			}
+			// млечен цвят от второто домашно
+			let randomMilkyColor = function() {
+				return lerp(
+					[Math.random(), Math.random(), Math.random()],
+					[1.,1.,1.],
+					0.4
+					);
+			}
+			let makeBezierSurface = function (p11, p21, p12, p22) {
+				let facette = new BezierSurface();
+
+				let ctrlPoints = [];
+				for (let i = 0; i < 4; ++i) {
+					ctrlPoints[i] = [];
+					let t1 = i / 3;
+					for (let j = 0; j < 4; ++j) {
+						let t2 = j / 3;
+						ctrlPoints[i][j] = lerp(lerp(p11, p21, t1), lerp(p12, p22, t1), t2); // взима точка върху триъгълника
+						ctrlPoints[i][j] = unitVector(ctrlPoints[i][j]); // отива върху сферата
+					}
+				}
+				// едната точка ще е част от шип
+				// по-точно средната на всеки триъгълник
+				ctrlPoints[3][3] = [
+					ctrlPoints[3][3][0] * 2,
+					ctrlPoints[3][3][1] * 2,
+					ctrlPoints[3][3][2] * 2
+				]
+				facette.set(ctrlPoints);
+				facette.color = randomMilkyColor();
+				return facette;
+			}
+
+			// всеки триъгълник ще се прави от 3 повърхности на безие
+			let triangle = function (p1, p2, p3) {
+				// междинни точки
+				let p12 = mid(p1, p2);
+				let p23 = mid(p2, p3);
+				let p13 = mid(p1, p3);
+				let p123 = lerp(lerp(p1, p2, 0.5), p3, 1 / 3);
+			
+				let f1 = makeBezierSurface(p1, p12, p13, p123);
+				let f2 = makeBezierSurface(p2, p23, p12, p123);
+				let f3 = makeBezierSurface(p3, p13, p23, p123);
+
+				virus.push(f1);
+				virus.push(f2);
+				virus.push(f3);
+			}
+
+			// copy-pasta от библиотеката
+			
+			// златното сечение 1.618...
+			var f = (1 + Math.sqrt(5)) / 2;
+
+			// триъгълници - стени на икосаедъра
+			triangle([0, 1, f], [1, f, 0], [-1, f, 0]);	// десен горен
+			triangle([0, 1, -f], [-1, f, 0], [1, f, 0]);	// десен долен
+			triangle([0, -1, f], [-1, -f, 0], [1, -f, 0]);	// ляв горен
+			triangle([0, -1, -f], [1, -f, 0], [-1, -f, 0]);	// ляв долен
+
+			triangle([1, f, 0], [f, 0, 1], [f, 0, -1]);	// предни и задни
+			triangle([1, -f, 0], [f, 0, -1], [f, 0, 1]);
+			triangle([-1, f, 0], [-f, 0, -1], [-f, 0, 1]);
+			triangle([-1, -f, 0], [-f, 0, 1], [-f, 0, -1]);
+
+			triangle([f, 0, 1], [0, 1, f], [0, -1, f]);	// горни и долни
+			triangle([-f, 0, 1], [0, -1, f], [0, 1, f]);
+			triangle([f, 0, -1], [0, -1, -f], [0, 1, -f]);
+			triangle([-f, 0, -1], [0, 1, -f], [0, -1, -f]);
+
+			triangle([0, 1, f], [f, 0, 1], [1, f, 0]);	// горни ъглови 
+			triangle([0, 1, f], [-1, f, 0], [-f, 0, 1]);
+			triangle([0, -1, f], [1, -f, 0], [f, 0, 1]);
+			triangle([0, -1, f], [-f, 0, 1], [-1, -f, 0]);
+
+			triangle([0, 1, -f], [1, f, 0], [f, 0, -1]);	// долни ъглови 
+			triangle([0, 1, -f], [-f, 0, -1], [-1, f, 0]);
+			triangle([0, -1, -f], [f, 0, -1], [1, -f, 0]);
+			triangle([0, -1, -f], [-1, -f, 0], [-f, 0, -1]);
+
+		}
+
+		var time = now();
+		function now() { return (new Date()).getTime() / 1000; }
+
+		function drawFrame() {
+			time = now();
+			gl.clear(gl.COLOR_BUFFER_BIT + gl.DEPTH_BUFFER_BIT);
+
+			lookAt(
+				[5, 5, 5],
+				[0, 0, 0],
+				[0, 0, 1]);
+
+			let t = time * 20;
+			// glsl не обича твърде големи числа,
+			// за това взимаме относително време спрямо началото. 
+			// след няколко часа работа вероятно ще се бъгва
+			gl.uniform1f(uTime, time - startTime);
+			// вирусът ще се върти
+			pushMatrix();
+			xRotate(t);
+			yRotate(t);
+			zRotate(t);
+			for (f of virus) f.draw();
+			popMatrix();
+
+			requestAnimationFrame(drawFrame);
+		}
+	</script>
+</head>
+
+<body onload="start()">
+	<h2>Вирусът</h2>
+
+	<noscript>
+		Искаме JavaScript, но няма!
+	</noscript>
+
+	<canvas id="picasso" width="600" height="400" style="border: solid;">
+		Искаме canvas, но няма!
+	</canvas>
+</body>
