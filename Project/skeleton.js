@@ -209,12 +209,13 @@ Robot = function() {
 
 	this.pos = [0,0,0];
 	this.prevPos = [0,0,0];
-	this.rot = 0;
-	this.prevRot = 0;
+	this.yaw = 0;
+	this.prevYaw = 0;
+	this.pitch = Math.PI / 4;
 	this.base = new Bone([2.5, 2.5, 0.5]);
 
 	this.neck = new Bone([1, 1, 1]);
-	this.head = new Bone([1,1,0.5]);
+	this.head = new Bone([3, 2, 1]);
 	
 	this.targets = [];
 	this.targets[0] = [ 3, 3, -2];
@@ -230,14 +231,13 @@ Robot = function() {
 }
 
 Robot.prototype.draw = function(t) {
-
 	pushMatrix();
 	translate(this.pos);
 	translate([0,0,1.5]);
-	zRotate(this.rot);
+	zRotate(this.yaw);
 	this.base.draw();
 
-	let r = this.rot / 180 * Math.PI;
+	let r = this.yaw / 180 * Math.PI;
 	// calculate difference in position
 	let delta = [
 		this.pos[0] - this.prevPos[0],
@@ -255,8 +255,7 @@ Robot.prototype.draw = function(t) {
 	if(Math.abs(delta[2]) > 1) delta[2] = 1;
 	
 	// difference in rotation
-	let deltaR = this.rot - this.prevRot;
-
+	let deltaR = this.yaw - this.prevYaw;
 	let dr = deltaR / 180 * Math.PI;
 
 	let biggestDistance = 1.0; 
@@ -312,10 +311,11 @@ Robot.prototype.draw = function(t) {
 	}
 
 	this.neck.draw();
+	yRotate(this.pitch);
 	this.head.draw();
 
 	this.prevPos = [this.pos[0], this.pos[1], this.pos[2]];
-	this.prevRot = this.rot;
+	this.prevYaw = this.yaw;
 	
 	popMatrix();
 }
