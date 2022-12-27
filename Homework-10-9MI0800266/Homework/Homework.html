@@ -1,15 +1,14 @@
-﻿	<!DOCTYPE html>
+﻿<!DOCTYPE html>
 
 <head>
 	<meta charset="utf-8"/>
-	<title>Домашно 8: Пилето</title>
+	<title>Релефно земно кълбо</title>
 
 	<script src="webgl-fmi.js"></script>
 	<script src="shaders.js"></script>
-	<script src="skeleton.js"></script>
 	
 	<script>
-		function start( )
+ 		function start( )
 		{
 			var	canvas = document.getElementById("picasso");
 			canvas.addEventListener('webglcontextlost',function(event){event.preventDefault();},false);
@@ -26,44 +25,53 @@
 			getVariables();
 
 			gl.enable(gl.DEPTH_TEST);
-			gl.clearColor(1,1,1,1);
+			gl.clearColor(0.8,0.8,0.8,1);
 
 			identity();
 			perspective(30,gl.canvas.width/gl.canvas.height,1,40000);
 			gl.uniform1i(uUseNormalMatrix,false);
 
 			gl.uniform3f(uAmbientColor,0.3,0.3,0.3);
-			gl.uniform3f(uDiffuseColor,0.8,0.8,0.8);
+			gl.uniform3f(uDiffuseColor,1,1,1);
 			gl.uniform3f(uLightDir,0,0,-1);
 
-			// Пиле
-			bird = new Bird();
+			// използваме модул №0 за текстури
+			// gl.uniform1i(uSampler, 0);
+			gl.activeTexture(gl.TEXTURE0);
+			gl.uniform1i(uDisplSampler, 1);
+
+			// дефиниране на Земята
+			SPHERE_SIDES = 256;
+			earth = new Sphere([0,0,0],4);
+			earth.color = [1,1,1];
+			earth.texture = loadTexture('land_ocean_ice_2048.jpg');
+			earth.displTex = loadTexture('World-Elevation-Grey-Map.jpg');
+			gl.activeTexture(gl.TEXTURE1);
+			gl.bindTexture(gl.TEXTURE_2D, earth.displTex);
+			gl.activeTexture(gl.TEXTURE0);
 		}
 
+		var time = now();
 		function now() { return (new Date()).getTime()/1000; }
 		
 		function drawFrame()
 		{
-			var time = now();
-			
+			time = now();
 			gl.clear(gl.COLOR_BUFFER_BIT+gl.DEPTH_BUFFER_BIT);
 			
-			var a = time/3;
-			lookAt([6*cos(a),6*sin(a),4+2*sin(a*2)],[0,0,1],[0,0,1]);
-
-			// пиле лети!!
-			// всичкия код е в skeleton.js
-			// има малки промени по Bone класа
-			bird.animate(time);
-			bird.draw();
-
+			lookAt([8 + (sin(time / 2) + 1) * 5,0,3],[0,-2,2],[0,0,1]);
+			
+			// рисуване на Земята
+			earth.rot = [-90,23,0,-40*time];
+			earth.draw();
+			
 			requestAnimationFrame(drawFrame);
 		}
 	</script>	
 </head>
 
 <body onload="start()">
-	<h2>Домашно 8: Пилето</h2>
+	<h2>Релефно земно кълбо</h2>
 
 	<noscript>
 		Искаме JavaScript, но няма!
