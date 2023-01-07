@@ -1,0 +1,334 @@
+﻿<!DOCTYPE html>
+
+<head>
+	<meta charset="utf-8" />
+	<title>Графиката</title>
+
+	<script src="webgl-fmi.js"></script>
+	<script src="shaders.js"></script>
+
+	<style>
+		canvas {
+			display: block;
+			position: fixed;
+			left: 2em;
+			top: 2em;
+			margin: auto;
+			width: calc(100% - 4em);
+			height: calc(100% - 4em);
+			box-shadow: 0px 0px 6em DarkBlue;
+		}
+		.text {
+			display: block;
+			position: fixed;
+			right: 1em;
+			top: 1em;
+			margin: auto;
+		}
+	</style>
+
+	<script>
+		var dataBuff, minMax;
+		var f, n;
+		var minT = 0, maxT = 2;
+		var minF = -1., maxF = 1.;
+		var gMinF = -1., gMaxF = 1.;
+		var colors;
+		var fb = null, graphTex, screenQuad;
+		var fb_width, fb_height;
+		var isDraggingMin;
+		var isDraggingMax;
+
+		function randomColor() {
+			return [
+				Math.random(),
+				Math.random(),
+				Math.random()
+			];
+		}
+
+		function start() {
+			gl = getContext("picasso");
+			glprog = getProgram(vShader, fShader);
+			getVariables(glprog);
+			window.addEventListener('resize', resized, false);
+			window.addEventListener('keydown', keydown, false);
+			window.addEventListener('mousedown', mousedown, false);
+			window.addEventListener('mouseup', mouseup, false);
+			window.addEventListener('mousemove', mousemove, false);
+
+			gl.enable(gl.BLEND);
+			gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+			n = 1024 * 64; // samples
+			f = 10; // functions
+
+			initFunctions();
+			setRange(0, n);
+			gMaxF = maxF;
+			gMinF = minF;
+
+			screenQuad = new ScreenQuad();
+			screenProg = getProgram(vScreenShader, fScreenShader);
+			getVariables(screenProg); // това би направило проблем ако имаше съвпадащи променливи в шейдърите
+
+			gradientProg = getProgram(vScreenShader, fGradientShader);
+			getVariables(gradientProg);
+
+			drawFrame();
+			resized();
+		}
+
+		function deleteFramebuffer() {
+			gl.deleteTexture(graphTex);
+			gl.deleteFramebuffer(fb);
+			fb = null;
+			graphTex = null;
+		}
+
+		// рисува графиките като статична картинка
+		function drawOnFramebuffer() {
+			gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+			gl.useProgram(glprog);
+
+			gl.viewport(0, 0, fb_width, fb_height);
+			gl.clearColor(1, 1, 1, 1);
+			gl.clear(gl.COLOR_BUFFER_BIT);
+			drawGraphs(0, 2, gMinF, gMaxF, [0.5, 0.5, 0.5]);
+
+			gl.useProgram(null);
+			gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+		}
+
+		// правоъгълник за рисуване на екрана
+		ScreenQuad = function () {
+			let data = [
+				-1, -1,
+				-1, 1,
+				1, -1,
+				1, -1,
+				1, 1,
+				-1, 1,
+			];
+			var buf = gl.createBuffer();
+			gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+			gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.STATIC_DRAW);
+			this.buf = buf;
+		}
+
+		ScreenQuad.prototype.draw = function () {
+			gl.bindBuffer(gl.ARRAY_BUFFER, this.buf);
+			gl.enableVertexAttribArray(aXYZ);
+			gl.vertexAttribPointer(aXYZ, 2, gl.FLOAT, false, 0 * FLOATS, 0 * FLOATS);
+			gl.drawArrays(gl.TRIANGLES, 0, 6);
+		}
+
+		function createFramebuffer() {
+			fb_width = gl.canvas.width;
+			fb_height = gl.canvas.height * 0.2;
+			
+			// текстура за рисуване
+			graphTex = gl.createTexture();
+			gl.bindTexture(gl.TEXTURE_2D, graphTex);
+			gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, fb_width, fb_height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+			gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+			gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+			gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+			gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+			gl.bindTexture(gl.TEXTURE_2D, null);
+			
+			// и фреймбуфер
+			fb = gl.createFramebuffer();
+			gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+			gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, graphTex, 0);
+			
+			if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) != gl.FRAMEBUFFER_COMPLETE) {
+				console.log("Framebuffer is not complete!");
+			}
+			
+			gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+		}
+
+		function initFunctions() {
+			let functions = [];
+			colors = [];
+			for (let i = 0; i < f; ++i) {
+				let a = (Math.random() - 0.5) * 0.5;
+				let b = (Math.random() - 0.5) * 0.5;
+				let c = (Math.random() - 0.5) * 0.5;
+				let d = (Math.random() - 0.5) * 0.5;
+				functions.push((t) => {
+					t *= Math.PI;
+					return a * sin(t) + b * sin(t * 4) + c * sin(t * 8) + d + Math.random() * 0.01;
+				});
+				colors.push(randomColor());
+			}
+
+			let data = [];
+			minMax = [];
+			for (let j = 0; j < n; ++j) {
+				let max = -100000;
+				let min = 100000;
+				for (let i = 0; i < f; ++i) {
+					let t = j / n * 2;
+					let res = functions[i](t);
+					data.push(t);
+					data.push(res);
+					data.push(0);
+					if (res > max) max = res;
+					if (res < min) min = res;
+				}
+				minMax.push(min, max);
+			}
+
+			dataBuff = gl.createBuffer();
+			gl.bindBuffer(gl.ARRAY_BUFFER, dataBuff);
+			gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.STATIC_DRAW);
+			gl.bindBuffer(gl.ARRAY_BUFFER, null);
+		}
+
+		function drawFrame() {
+			gl.clearColor(1, 1, 1, 1);
+			gl.clear(gl.COLOR_BUFFER_BIT + gl.DEPTH_BUFFER_BIT);
+
+			// рисуваме малката графика просто като картинка
+			gl.viewport(0, 0, gl.canvas.width, gl.canvas.height * 0.2);
+			gl.useProgram(screenProg);
+			gl.bindTexture(gl.TEXTURE_2D, graphTex);
+			screenQuad.draw();
+
+			
+			gl.useProgram(gradientProg);
+			gl.uniform1f(uMinGrad, minT);
+			gl.uniform1f(uMaxGrad, maxT);
+			screenQuad.draw();
+
+			// и рисуваме голямата графика 'на живо'
+			gl.viewport(0, gl.canvas.height * 0.2, gl.canvas.width, gl.canvas.height * 0.8);
+			gl.useProgram(glprog);
+			drawGraphs(minT, maxT, minF, maxF);
+			
+		}
+
+		function drawGraphs(minT, maxT, minF, maxF, color = null) {
+			gl.uniform1f(uMinF, minF);
+			gl.uniform1f(uMaxF, maxF);
+			gl.uniform1f(uMinT, minT);
+			gl.uniform1f(uMaxT, maxT);
+
+			gl.bindBuffer(gl.ARRAY_BUFFER, dataBuff);
+			gl.enableVertexAttribArray(aXYZ);
+
+			let first = Math.max(Math.floor(minT / 2. * n), 0);
+			let last = Math.min(Math.ceil(maxT / 2 * n), n);
+			for (let i = 0; i < f; ++i) {
+				if(color) {
+					gl.uniform3f(uColor, color[0], color[1], color[2]);
+				} else {
+					gl.uniform3f(uColor,
+						colors[i][0],
+						colors[i][1],
+						colors[i][2],
+					);
+				}
+				gl.vertexAttribPointer(aXYZ, 3, gl.FLOAT, false, 3 * f * FLOATS, i * 3 * FLOATS);
+				gl.drawArrays(gl.LINE_STRIP, first, last - first);
+			}
+		}
+
+		function setRange(first, last) {
+			let max = -10000;
+			let min = 10000;
+			for (let i = first; i <= last; ++i) {
+				if (minMax[2 * i + 0] < min) min = minMax[2 * i + 0];
+				if (minMax[2 * i + 1] > max) max = minMax[2 * i + 1];
+			}
+			minF = min;
+			maxF = max;
+		}
+
+		// размерът на екрана е променен
+		function resized() {
+			// вземаме текущия адрес
+			gl.canvas.width = gl.canvas.offsetWidth;
+			gl.canvas.height = gl.canvas.offsetHeight;
+
+			// създаваме текстурите за рисуване отново
+			deleteFramebuffer();
+			createFramebuffer();
+			drawOnFramebuffer();
+
+			// подаваме го на WebGL
+			gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+
+			// предизвикваме прерисуване на сцената
+			requestAnimationFrame(drawFrame);
+		}
+
+		function updateGraphs() {
+			let first = Math.max(Math.floor(minT / 2. * n), 0);
+			let last = Math.min(Math.ceil(maxT / 2 * n), n);
+
+			setRange(first, last);
+		}
+
+		function keydown(e) {
+			if (e.key == 'a') {
+				minT -= 0.01;
+			}
+			if (e.key == 'd') {
+				minT += 0.01;
+			}
+			if (e.key == 'ArrowRight') {
+				maxT += 0.01;
+			}
+			if (e.key == 'ArrowLeft') {
+				maxT -= 0.01;
+			}
+
+			updateGraphs();
+			requestAnimationFrame(drawFrame);
+		}
+
+		function mousedown(e) {
+			let x = e.offsetX, y = e.offsetY;
+			if(Math.abs(x - minT / 2 * gl.canvas.width) < 5 && y > 0.8 * gl.canvas.height) {
+				isDraggingMin = true;
+			}
+			if(Math.abs(x - maxT / 2 * gl.canvas.width) < 5 && y > 0.8 * gl.canvas.height) {
+				isDraggingMax = true;
+			}
+		}
+
+		function mouseup(e) {
+			isDraggingMax = false;
+			isDraggingMin = false;
+		}
+
+		function mousemove(e) {
+			let phi = 0.001;
+			if(isDraggingMin) {
+				minT = e.offsetX * 2 / gl.canvas.width;
+				if(minT > maxT - phi) {
+					minT = maxT - phi;
+				}
+			}
+			else if(isDraggingMax) {
+				maxT = e.offsetX * 2 / gl.canvas.width;
+				if(minT + phi > maxT - phi) {
+					maxT = minT + phi;
+				}
+			}
+			updateGraphs();
+			requestAnimationFrame(drawFrame);
+		}
+	</script>
+</head>
+
+<body onload="start()">
+	
+	<canvas id="picasso"></canvas>
+	<h1 class = "text">
+		Графиката
+	</h1>
+</body>
