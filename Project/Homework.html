@@ -1,65 +1,267 @@
-﻿	<!DOCTYPE html>
+﻿<!DOCTYPE html>
 
 <head>
-	<meta charset="utf-8"/>
+	<meta charset="utf-8" />
 	<title>Домашно 8: Пилето</title>
 
 	<script src="webgl-fmi.js"></script>
-	<script src="shaders.js"></script>
 	<script src="skeleton.js"></script>
-	
+	<script src="framebuffer.js"></script>
+
 	<script>
-		function start( )
-		{
-			var	canvas = document.getElementById("picasso");
-			canvas.addEventListener('webglcontextlost',function(event){event.preventDefault();},false);
-			canvas.addEventListener('webglcontextrestored',function(){init();},false);
+		var shadowFrameBuffer, shadowTexture, shadowDepthTexture, shadowWidth = 1024, shadowHeight = 1024;
+		var width, height;
+		var cameraProj, shadowProj;
+		var lightDir = [0, -1 , 1];
 
-			init();
-			drawFrame();
+		function start() {
+			var canvas = document.getElementById("picasso");
+			canvas.addEventListener('webglcontextlost', function (event) { event.preventDefault(); }, false);
+			canvas.addEventListener('webglcontextrestored', function () { init(); }, false);
+
+			prepareInit();
 		}
-		
-		function init()
-		{
+
+		function prepareInit() {
+			vShader = null;
+			fShader = null;
+			loadFile("shader.vs", (text) => {
+				vShader = text;
+				init();
+			});
+			loadFile("shader.fs", (text) => {
+				fShader = text;
+				init();
+			});
+			vDepthShader = null;
+			fDepthShader = null;
+			loadFile("depth.vs", (text) => {
+				vDepthShader = text;
+				init();
+			});
+			loadFile("depth.fs", (text) => {
+				fDepthShader = text;
+				init();
+			});
+			vScreenShader = null;
+			fScreenShader = null;
+			loadFile("screen.vs", (text) => {
+				vScreenShader = text;
+				init();
+			});
+			loadFile("screen.fs", (text) => {
+				fScreenShader = text;
+				init();
+			});
+		}
+
+		function isReadyForInit() {
+			if (!vShader) return false;
+			if (!fShader) return false;
+			if (!vDepthShader) return false;
+			if (!fDepthShader) return false;
+			if (!vScreenShader) return false;
+			if (!fScreenShader) return false;
+			return true;
+		}
+
+		function init() {
+			if (!isReadyForInit()) return;
+
 			gl = getContext("picasso");
-			glprog = getProgram(vShader,fShader);
-			getVariables();
 
+			mainProg = getProgram(vShader, fShader);
+			depthProg = getProgram(vDepthShader, fDepthShader);
+			screenProg = getProgram(vScreenShader, fScreenShader);
+			
+			getVariables(mainProg);
+			getVariables(depthProg);
+			getVariables(screenProg);
+			
 			gl.enable(gl.DEPTH_TEST);
-			gl.clearColor(1,1,1,1);
-
+			gl.clearColor(1, 1, 1, 1);
+			
+			activateProgram(mainProg);
 			identity();
-			perspective(30,gl.canvas.width/gl.canvas.height,1,40000);
-			gl.uniform1i(uUseNormalMatrix,false);
+			perspective(30, gl.canvas.width / gl.canvas.height, 1, 100);
+			cameraProj = glpmat;
+			shadowProj = orthoMatrix(30, 30, 1, 100);
 
-			gl.uniform3f(uAmbientColor,0.3,0.3,0.3);
-			gl.uniform3f(uDiffuseColor,0.8,0.8,0.8);
-			gl.uniform3f(uLightDir,0,0,-1);
+			gl.uniform1i(mainProg.uUseNormalMatrix, false);
+			gl.uniform3f(mainProg.uDiffuseColor, 1.0, 1.0, 1.0);
+			gl.uniform3f(mainProg.uLightDir, lightDir[0], lightDir[1], lightDir[2]);
+
+			width = gl.canvas.width;
+			height = gl.canvas.height;
+			
+			shadowDepthTexture = makeDepthTexture(shadowWidth, shadowHeight);
+			shadowTexture = makeColorTexture(shadowWidth, shadowHeight);
+			shadowFrameBuffer = makeFrameBuffer(shadowWidth, shadowHeight, [
+				[gl.COLOR_ATTACHMENT0, shadowTexture],
+				[gl.DEPTH_ATTACHMENT, shadowDepthTexture]
+			]);
+
+			screenQuad = new ScreenQuad();
+
+			setupInput()
 
 			robot = new Robot();
 
+			bird = new Bird();
+			bird.base = [2,2,2];
+
+			yaw = 0;
+			pitch = Math.PI / 4;
+
+			drawFrame();
+		}
+
+		function now() { return (new Date()).getTime() / 1000; }
+
+		function placeCamera() {
+			yaw = -robot.yaw / 180 * Math.PI;
+			pitch = (90 + robot.pitch) / 180 * Math.PI;
+			if (pitch > Math.PI) pitch = Math.PI;
+			if (pitch < 0) pitch = 0.0001;
+			lookAt([
+				30 * cos(yaw) * sin(pitch) + robot.pos[0],
+				30 * sin(yaw) * sin(pitch) + robot.pos[1],
+				30 * cos(pitch) + robot.pos[2] + 3
+			], [
+				robot.pos[0],
+				robot.pos[1],
+				robot.pos[2] + 3
+			], [0, 0, 1]);
+		}
+
+		function update() {
+			var time = now();
+
+			gl.clear(gl.COLOR_BUFFER_BIT + gl.DEPTH_BUFFER_BIT);
+
+			var a = time / 3;
+
+			bird.animate(time);
+
+			gl.bindTexture(gl.TEXTURE_2D, shadowTexture);
+			heightPass();
+			gl.bindFramebuffer(gl.FRAMEBUFFER, shadowFrameBuffer);
+			const pixels = new Uint8Array(4);
+			gl.readPixels(
+				Math.floor(shadowWidth / 2), 
+				Math.floor(shadowHeight / 2),
+				1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+			// console.log(pixels[0]);
+			robot.pos[2] = 40 - pixels[0] / 255 * 100;
+			gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+			moveRobot();
+			mouseDelta = [0, 0];
+
+			drawFrame();
+		}
+
+		function drawFrame() {
+			// gl.viewport(0, 0, width, height);
+			// activateProgram(screenProg);
+			// gl.bindTexture(gl.TEXTURE_2D, shadowTexture);
+			// screenQuad.draw();
+
+			shadowPass();
+			gl.bindTexture(gl.TEXTURE_2D, shadowDepthTexture);
+
+
+			gl.viewport(0, 0, width, height);
+			activateProgram(mainProg);
+			
+			var shadowMat = multiplyMatrix(glpmat, glvmat);
+			gl.uniformMatrix4fv(mainProg.uShadowMatrix,false,shadowMat);
+
+			setProjMatrix(cameraProj);
+			placeCamera();
+			drawScene();
+
+			// activateProgram(screenProg);
+			// gl.bindTexture(gl.TEXTURE_2D, shadowDepthTexture);
+			// screenQuad.draw();
+
+			activateProgram(mainProg);
+			requestAnimationFrame(update);
+		}
+
+		function drawTerrain() {
+			for (c of floor) c.draw();
+		}
+
+		function drawScene() {
+			drawTerrain();
+			robot.draw(time);
+			bird.draw();
+		}
+
+		function shadowPass() {
+			gl.bindFramebuffer(gl.FRAMEBUFFER, shadowFrameBuffer);
+			gl.viewport(0, 0, shadowWidth, shadowHeight);
+			gl.clearColor(1, 1, 1, 1);
+			gl.clear(gl.COLOR_BUFFER_BIT + gl.DEPTH_BUFFER_BIT);
+
+			activateProgram(depthProg);
+
+			lookAt([
+				robot.pos[0] + lightDir[0] * 40, 
+				robot.pos[1] + lightDir[1] * 40, 
+				robot.pos[2] + lightDir[2] * 40
+			], robot.pos, [0,0,1]);
+			setProjMatrix(shadowProj);
+
+			drawScene();
+			gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+		}
+
+		function heightPass() {
+			gl.bindFramebuffer(gl.FRAMEBUFFER, shadowFrameBuffer);
+			gl.viewport(0, 0, shadowWidth, shadowHeight);
+			gl.clearColor(1, 1, 1, 1);
+			gl.clear(gl.COLOR_BUFFER_BIT + gl.DEPTH_BUFFER_BIT);
+
+			activateProgram(depthProg);
+
+			lookAt([
+				robot.pos[0], 
+				robot.pos[1], 
+				40], 
+				robot.pos, [0,1,0]);
+			setProjMatrix(shadowProj);
+
+			drawTerrain();
+			gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+		}
+
+		function setupInput() {
 			isKeyPressed = [];
 			document.addEventListener("keydown", (e) => {
 				isKeyPressed[e.key] = true;
 			});
-			
+
 			document.addEventListener("keyup", (e) => {
 				isKeyPressed[e.key] = false;
 			});
-		
-			mousePos = [0,0];
-			mouseDelta = [0,0];
+
+			mousePos = [0, 0];
+			mouseDelta = [0, 0];
 			picasso.addEventListener("mousemove", (e) => {
 				mousePos = [e.x, e.y];
 				mouseDelta = [e.movementX, e.movementY];
 			});
 
 			floor = [];
-			for(let i = 0; i < 10; ++ i) {
-				for(let j = 0; j < 10; ++ j) {
-					floor.push(custom(new Cuboid([i * 5 - 25, j * 5 - 25, -0.5], [5,5, 1]), 
-					{color: [
-						Math.random(),Math.random(),Math.random()]}));
+			for (let i = 0; i < 10; ++i) {
+				for (let j = 0; j < 10; ++j) {
+					floor.push(custom(
+						new Cuboid([i * 5 - 25, j * 5 - 25, -0.5 + 2 * (Math.random() - 0.5)], [5, 5, 1]),
+						{
+							color: [Math.random(), Math.random(), Math.random()]
+						}));
 				}
 			}
 
@@ -67,61 +269,21 @@
 			let canvas = document.getElementById('picasso');
 			canvas.addEventListener('click', lockCursor);
 			document.addEventListener('pointerlockchange', () => isPointerLocked = !isPointerLocked);
-
-			lockCursor();
-			yaw = 0;
-			pitch = Math.PI / 4;
-		}
-
-		function now() { return (new Date()).getTime()/1000; }
-		
-		function drawFrame()
-		{
-			var time = now();
-			
-			gl.clear(gl.COLOR_BUFFER_BIT+gl.DEPTH_BUFFER_BIT);
-			
-			var a = time/3;
-			// lookAt([30*cos(a),30*sin(a),20],[0,0,1],[0,0,1]);
-			// lookAt([60, 0, 40], [0,0,1], [0,0,1]);
-			yaw = -robot.yaw / 180 * Math.PI;
-			pitch = (90 + robot.pitch) / 180 * Math.PI;
-			if(pitch > Math.PI) pitch = Math.PI;
-			if(pitch < 0) pitch = 0.0001;
-			lookAt([
-				30 * cos(yaw) * sin(pitch) + robot.pos[0],
-				30 * sin(yaw) * sin(pitch) + robot.pos[1],
-				30 * cos(pitch) + robot.pos[2] + 3
-			],[
-				robot.pos[0],
-				robot.pos[1],
-				robot.pos[2] + 3
-			], [0,0,1]);
-
-			
-			moveRobot();
-			mouseDelta = [0,0];
-			
-			for(c of floor) c.draw();
-			// robot.rot += 0.01;
-			robot.draw(time);
-
-			requestAnimationFrame(drawFrame);
 		}
 
 		function moveRobot() {
-			let speed = 0.1;
+			let speed = 0.03;
 
-			robot.yaw += mouseDelta[0] * 2.0;
-
-			if(isKeyPressed['ArrowLeft']) {
+			if (isKeyPressed['ArrowLeft']) {
 				robot.yaw -= 10. * speed;
 			}
-			if(isKeyPressed['ArrowRight']) {
+			if (isKeyPressed['ArrowRight']) {
 				robot.yaw += 10. * speed;
 			}
-			robot.pitch += -mouseDelta[1];
-			
+			if (isPointerLocked) {
+				robot.yaw += mouseDelta[0] * 0.2;
+				robot.pitch += -mouseDelta[1];
+			}
 
 			let r = -robot.yaw / 180 * Math.PI;
 			let forward = [
@@ -131,32 +293,32 @@
 				-sin(r) * speed, cos(r) * speed
 			];
 
-			if(isKeyPressed['w']) {
+			if (isKeyPressed['w']) {
 				robot.pos[0] -= forward[0];
 				robot.pos[1] -= forward[1];
 			}
-			if(isKeyPressed['s']) {
+			if (isKeyPressed['s']) {
 				robot.pos[0] += forward[0];
 				robot.pos[1] += forward[1];
 			}
-			if(isKeyPressed['a']) {
+			if (isKeyPressed['a']) {
 				robot.pos[0] -= sideways[0];
 				robot.pos[1] -= sideways[1];
 			}
-			if(isKeyPressed['d']) {
+			if (isKeyPressed['d']) {
 				robot.pos[0] += sideways[0];
 				robot.pos[1] += sideways[1];
 			}
 		}
 
 		function lockCursor() {
-			if(isPointerLocked) {
-					document.exitPointerLock();
+			if (isPointerLocked) {
+				document.exitPointerLock();
 			} else {
 				document.getElementById('picasso').requestPointerLock();
 			}
 		}
-	</script>	
+	</script>
 </head>
 
 <body onload="start()">
@@ -165,8 +327,8 @@
 	<noscript>
 		Искаме JavaScript, но няма!
 	</noscript>
-	
-	<canvas id="picasso" width="600" height="400" style="border: solid;">
+
+	<canvas id="picasso" width="1000" height="800" style="border: solid;">
 		Искаме canvas, но няма!
 	</canvas>
 </body>

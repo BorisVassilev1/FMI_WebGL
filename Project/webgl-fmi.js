@@ -1,10 +1,12 @@
-﻿// Библиотека WebGL-FMI v0.16.05Ex
+﻿// Библиотека WebGL-FMI v0.22.11
 //
 // Работа с контексти и шейдъри
 //		getContext(id)
 //		getShader(id,type)
 //		getProgram(idv,idf)
+//		loadFile(url, onLoad)
 //		getVariables()
+//		activateProgram(prog)
 //
 // Математически и помощни функции и константи
 //		random(a,b)
@@ -13,6 +15,13 @@
 //		cos(a)
 //		PI
 //		custom(obj,props)
+//
+// Работа с текстури
+//		loadTexture(url,post)
+//		texIdentity()
+//		texTranslate(m,v)
+//		texScale(m,v)
+//		texRotate(m,a)
 //
 // Работа с вектори и матрици
 //		unitVector(x)
@@ -49,21 +58,22 @@
 //		perspMatrix(angle, aspect, near, far)
 //		lookAt(eye, focus, up)
 //		perspective(angle, aspect, near, far)
+//		setProjMatrix(mat)
 //
 // Графични обекти (класове)
-//		Cube(center,size)
-//		Cuboid(center,size)
+//		Cube(center,size) <- textured
+//		Cuboid(center,size) <- textured
 //		Pyramid(center,size,height,n)
 //		Cone(center,size,height)
 //		Conoid(center,size,ratio)
 //		Prism(center,size,height,n)
-//		Cylinder(center,size,height)
-//		Sphere(center,size)
+//		Cylinder(center,size,height) <- textured
+//		Sphere(center,size) <- textured
 //		Spheroid(center,size)
 //		Icosahedron(center,size)
 //		GeodesicSphere(center,size)
 //		RotationalSolid(center,size,f)
-//		Torus(center,size,R,r)
+//		Torus(center,size,R,r) <- textured
 //
 // Константи
 //		CONE_SIDES = 32;
@@ -80,6 +90,7 @@ var glprog;			// глобална GLSL програма
 var glmat;			// глобална матрица на модела
 var glmatnew;		// true, ако матрицата е променена, но не е подадена на шейдъра
 var glvmat;			// глобална матрица на гледната точка
+var glpmat;			// глобална матрица за проекция
 var glstack = [];	// стек от матрици на модела
 
 
@@ -97,7 +108,7 @@ function getContext(id)
 		return null;
 	}
 
-	var context = canvas.getContext("webgl");
+	var context = canvas.getContext("webgl2");
 	if (!context)
 	{
 		context = canvas.getContext("experimental-webgl");
@@ -130,10 +141,16 @@ function getShader(id,type)
 	return shader;
 }
 
+function loadFile(url, onLoad) {
+	fetch(url).then(response => response.text()).then(text => {
+		onLoad(text);
+	});
+}
 
 // връща готова програма
-function getProgram(idv,idf)
+function getProgram(idv, idf)
 {
+
 	var vShader = getShader(idv,gl.VERTEX_SHADER);
 	var fShader = getShader(idf,gl.FRAGMENT_SHADER);
 			
@@ -154,20 +171,26 @@ function getProgram(idv,idf)
 	return shaderProgram;
 }
 
+function activateProgram(prog) {
+	gl.useProgram(prog);
+	glprog = prog;
+}
+
 
 // намира адресите на всички глобални и атрибутни променливи
-function getVariables()
+function getVariables(prog = glprog, target = window)
 {
-	for (var i=0; i<gl.getProgramParameter(glprog,gl.ACTIVE_UNIFORMS); i++)
+	for (var i=0; i<gl.getProgramParameter(prog,gl.ACTIVE_UNIFORMS); i++)
 	{
-		var name = gl.getActiveUniform(glprog,i).name;
-		window[name] = gl.getUniformLocation(glprog,name);
+		var name = gl.getActiveUniform(prog,i).name;
+		prog[name] = gl.getUniformLocation(prog,name);
 	}
 
-	for (var i=0; i<gl.getProgramParameter(glprog,gl.ACTIVE_ATTRIBUTES); i++)
+	for (var i=0; i<gl.getProgramParameter(prog,gl.ACTIVE_ATTRIBUTES); i++)
 	{
-		var name = gl.getActiveAttrib(glprog,i).name;
-		window[name] = gl.getAttribLocation(glprog,name);
+		var name = gl.getActiveAttrib(prog,i).name;
+		// if(!window[name])
+		window[name] = gl.getAttribLocation(prog,name);
 	}
 }
 
@@ -212,7 +235,6 @@ function custom(obj,props)
 	return obj;
 }
 
-
 // създава матрица за ортографска проекция
 function orthoMatrix(width, height, near, far)
 {
@@ -242,10 +264,20 @@ function perspMatrix(angle, aspect, near, far)
 // установява перспективна проекция
 function perspective(angle,aspect,near,far)
 {
-	var proj = perspMatrix(angle,aspect,near,far);
-	gl.uniformMatrix4fv(uProjectionMatrix,false,proj);
+	glpmat = perspMatrix(angle,aspect,near,far);
+	gl.uniformMatrix4fv(glprog.uProjectionMatrix,false,glpmat);
 }
 
+function ortho(width,height,near,far)
+{
+	glpmat = orthoMatrix(width, height,near,far);
+	gl.uniformMatrix4fv(glprog.uProjectionMatrix,false,glpmat);
+}
+
+function setProjMatrix(mat) {
+	glpmat = mat;
+	gl.uniformMatrix4fv(glprog.uProjectionMatrix,false,glpmat);
+}
 
 // единичен вектор
 function unitVector(x)
@@ -391,7 +423,7 @@ function calculateNormalMatrix(a) {
 function lookAt(eye,target,up)
 {
 	glvmat = viewMatrix(eye,target,up);
-	gl.uniformMatrix4fv(uViewMatrix,false,glvmat);
+	gl.uniformMatrix4fv(glprog.uViewMatrix,false,glvmat);
 }
 
 
@@ -542,7 +574,7 @@ function useMatrix()
 	if (glmatnew)
 	{
 		glmatnew = false;
-		gl.uniformMatrix4fv(uModelMatrix,false,glmat);
+		gl.uniformMatrix4fv(glprog.uModelMatrix,false,glmat);
 	}
 }
 
@@ -661,18 +693,18 @@ CanonicalCube = function()
 			  [0,0,1], [0,0,-1] ];
 	// общ списък връх-нормала
 	var data = [].concat(
-			  v[0],n[0],v[1],n[0],v[4],n[0],
-			  v[4],n[0],v[1],n[0],v[5],n[0],
-			  v[6],n[1],v[2],n[1],v[7],n[1],
-			  v[7],n[1],v[2],n[1],v[3],n[1],
-			  v[5],n[2],v[1],n[2],v[6],n[2],
-			  v[6],n[2],v[1],n[2],v[2],n[2],
-			  v[4],n[3],v[7],n[3],v[0],n[3],
-			  v[0],n[3],v[7],n[3],v[3],n[3],
-			  v[4],n[4],v[5],n[4],v[7],n[4],
-			  v[7],n[4],v[5],n[4],v[6],n[4],
-			  v[0],n[5],v[3],n[5],v[1],n[5],
-			  v[1],n[5],v[3],n[5],v[2],n[5] );
+			  v[0],n[0],0,0, v[1],n[0],1,0, v[4],n[0],0,1, // предна стена
+			  v[4],n[0],0,1, v[1],n[0],1,0, v[5],n[0],1,1,
+			  v[6],n[1],0,1, v[2],n[1],0,0, v[7],n[1],1,1, // задна стена
+			  v[7],n[1],1,1, v[2],n[1],0,0, v[3],n[1],1,0, 
+			  v[5],n[2],0,1, v[1],n[2],0,0, v[6],n[2],1,1, // дясна стена 
+			  v[6],n[2],1,1, v[1],n[2],0,0, v[2],n[2],1,0, 
+			  v[4],n[3],1,1, v[7],n[3],0,1, v[0],n[3],1,0, // лява стена 
+			  v[0],n[3],1,0, v[7],n[3],0,1, v[3],n[3],0,0, 
+			  v[4],n[4],0,0, v[5],n[4],1,0, v[7],n[4],0,1, // горна стена
+			  v[7],n[4],0,1, v[5],n[4],1,0, v[6],n[4],1,1, 
+			  v[0],n[5],0,0, v[3],n[5],0,1, v[1],n[5],1,0, // долна стена 
+			  v[1],n[5],1,0, v[3],n[5],0,1, v[2],n[5],1,1 );
 	// локална променлива за инстанцията с WebGL буфер
 	var buf = gl.createBuffer();
 	gl.bindBuffer(gl.ARRAY_BUFFER,buf);
@@ -682,16 +714,27 @@ CanonicalCube = function()
 }
 
 // каноничен куб - метод за рисуване
-CanonicalCube.prototype.draw = function()
+CanonicalCube.prototype.draw = function(texture)
 {	
 	// активираме буфера, създаден от конструктора
 	gl.bindBuffer(gl.ARRAY_BUFFER,this.buf);
 	// казваме къде са координатите
 	gl.enableVertexAttribArray(aXYZ);
-	gl.vertexAttribPointer(aXYZ,3,gl.FLOAT,false,6*FLOATS,0*FLOATS);
+	gl.vertexAttribPointer(aXYZ,3,gl.FLOAT,false,8*FLOATS,0*FLOATS);
 	// казваме къде са нормалите
 	gl.enableVertexAttribArray(aNormal);
-	gl.vertexAttribPointer(aNormal,3,gl.FLOAT,false,6*FLOATS,3*FLOATS);
+	gl.vertexAttribPointer(aNormal,3,gl.FLOAT,false,8*FLOATS,3*FLOATS);
+	// казваме къде са текстурите
+	if (gl.isTexture(texture))
+	{
+		gl.bindTexture(gl.TEXTURE_2D,texture);
+		gl.enableVertexAttribArray(aST);
+		gl.vertexAttribPointer(aST,2,gl.FLOAT,false,8*FLOATS,6*FLOATS);
+	}
+	else
+	{
+		if (texture) gl.disableVertexAttribArray(aST);
+	}
 	// рисуваме
 	gl.drawArrays(gl.TRIANGLES,0,36);
 }
@@ -707,6 +750,8 @@ Cube = function(center,size)
 	this.color = [1,0.75,0];
 	this.offset = undefined;
 	this.rot = undefined;
+	this.texture = undefined; // неизвестна текстура
+	this.texMatrix = new Float32Array([1,0,0,0,1,0,0,0,1]); // текстурна матрица
 	// създаваме еднократно канонична инстанция
 	if (!canonicalCube)
 		canonicalCube = new CanonicalCube();
@@ -722,13 +767,14 @@ Cube.prototype.draw = function()
 	{
 		if (this.rot[0]) zRotate(this.rot[0]);	// хоризонтален ъгъл
 		if (this.rot[1]) yRotate(this.rot[1]);	// вертикален ъгъл
-		if (this.rot[2]) xRotate(this.rot[1]);	// вертикален ъгъл
-		if (this.rot[3]) zRotate(this.rot[2]);	// осев ъгъл
+		if (this.rot[2]) xRotate(this.rot[2]);	// вертикален ъгъл
+		if (this.rot[3]) zRotate(this.rot[3]);	// осев ъгъл
 	}
 	scale([this.size,this.size,this.size]); // и размера
 	if (this.offset) translate(this.offset); // и отместването
 	useMatrix();
-	canonicalCube.draw(); // самото рисуване
+	if (this.texture) gl.uniformMatrix3fv(glprog.uTexMatrix,false,this.texMatrix);
+	canonicalCube.draw(this.texture); // самото рисуване
 	popMatrix(); // възстановяваме матрицата
 }
 
@@ -743,6 +789,8 @@ Cuboid = function(center,size)
 	this.color = [1,0.75,0];
 	this.offset = undefined;
 	this.rot = undefined;
+	this.texture = undefined; // неизвестна текстура
+	this.texMatrix = new Float32Array([1,0,0,0,1,0,0,0,1]); // текстурна матрица
 	// създаваме еднократно канонична инстанция
 	if (!canonicalCube)
 		canonicalCube = new CanonicalCube();
@@ -758,13 +806,14 @@ Cuboid.prototype.draw = function()
 	{
 		if (this.rot[0]) zRotate(this.rot[0]);	// хоризонтален ъгъл
 		if (this.rot[1]) yRotate(this.rot[1]);	// вертикален ъгъл
-		if (this.rot[2]) xRotate(this.rot[1]);	// вертикален ъгъл
-		if (this.rot[3]) zRotate(this.rot[2]);	// осев ъгъл
+		if (this.rot[2]) xRotate(this.rot[2]);	// вертикален ъгъл
+		if (this.rot[3]) zRotate(this.rot[3]);	// осев ъгъл
 	}
 	scale(this.size); // и размера
 	if (this.offset) translate(this.offset); // и отместването
 	useMatrix();
-	canonicalCube.draw(); // самото рисуване
+	if(this.texture) gl.uniformMatrix3fv(glprog.uTexMatrix,false,this.texMatrix);
+	canonicalCube.draw(this.texture); // самото рисуване
 	popMatrix(); // възстановяваме матрицата
 }
 
@@ -854,8 +903,8 @@ Pyramid.prototype.draw = function()
 	{
 		if (this.rot[0]) zRotate(this.rot[0]);	// хоризонтален ъгъл
 		if (this.rot[1]) yRotate(this.rot[1]);	// вертикален ъгъл
-		if (this.rot[2]) xRotate(this.rot[1]);	// вертикален ъгъл
-		if (this.rot[3]) zRotate(this.rot[2]);	// осев ъгъл
+		if (this.rot[2]) xRotate(this.rot[2]);	// вертикален ъгъл
+		if (this.rot[3]) zRotate(this.rot[3]);	// осев ъгъл
 	}
 	scale([this.size,this.size,this.height]);
 	if (this.offset) translate(this.offset); // и отместването
@@ -949,8 +998,8 @@ Cone.prototype.draw = function()
 	{
 		if (this.rot[0]) zRotate(this.rot[0]);	// хоризонтален ъгъл
 		if (this.rot[1]) yRotate(this.rot[1]);	// вертикален ъгъл
-		if (this.rot[2]) xRotate(this.rot[1]);	// вертикален ъгъл
-		if (this.rot[3]) zRotate(this.rot[2]);	// осев ъгъл
+		if (this.rot[2]) xRotate(this.rot[2]);	// вертикален ъгъл
+		if (this.rot[3]) zRotate(this.rot[3]);	// осев ъгъл
 	}
 	scale([this.size,this.size,this.height]);
 	if (this.offset) translate(this.offset); // и отместването
@@ -1056,8 +1105,8 @@ Prism.prototype.draw = function()
 	{
 		if (this.rot[0]) zRotate(this.rot[0]);	// хоризонтален ъгъл
 		if (this.rot[1]) yRotate(this.rot[1]);	// вертикален ъгъл
-		if (this.rot[2]) xRotate(this.rot[1]);	// вертикален ъгъл
-		if (this.rot[3]) zRotate(this.rot[2]);	// осев ъгъл
+		if (this.rot[2]) xRotate(this.rot[2]);	// вертикален ъгъл
+		if (this.rot[3]) zRotate(this.rot[3]);	// осев ъгъл
 	}
 	scale([this.size,this.size,this.height]);
 	if (this.offset) translate(this.offset); // и отместването
@@ -1075,18 +1124,18 @@ CanonicalCylinder = function(n)
 	var a = 0, dA = 2*Math.PI/n;
 
 	// генериране на долната основа като ветрило
-	var data = [0,0,0, 0,0,-1];
+	var data = [0,0,0, 0,0,-1, 0.5,0.5];
 	for (var i=0; i<=n; i++)
 	{ 
-		data.push(Math.cos(a),Math.sin(a),0,0,0,-1);
+		data.push(Math.cos(a),Math.sin(a),0,0,0,-1, 0.5+0.5*Math.cos(a),0.5+0.5*Math.sin(a));
 		a += dA;
 	}
 
 	// генериране на горната основа като ветрило
-	data.push(0,0,1, 0,0,1);
+	data.push(0,0,1, 0,0,1, 0.5,0.5);
 	for (var i=0; i<=n; i++)
 	{ 
-		data.push(Math.cos(a),Math.sin(a),1,0,0,1);
+		data.push(Math.cos(a),Math.sin(a),1,0,0,1, 0.5+0.5*Math.cos(a),0.5+0.5*Math.sin(a));
 		a += dA;
 	}
 
@@ -1097,12 +1146,12 @@ CanonicalCylinder = function(n)
 	{ 
 		var N = [Math.cos(a),Math.sin(a)]; // нормала към един отвес
 		var M = [Math.cos(a+dA),Math.sin(a+dA)]; // нормала към следващия отвес
-		data.push(Math.cos(a),Math.sin(a),1,N[0],N[1],0);
-		data.push(Math.cos(a),Math.sin(a),0,N[0],N[1],0);
-		data.push(Math.cos(a+dA),Math.sin(a+dA),0,M[0],M[1],0);
-		data.push(Math.cos(a+dA),Math.sin(a+dA),1,M[0],M[1],0);
-		data.push(Math.cos(a+dA),Math.sin(a+dA),0,M[0],M[1],0);
-		data.push(Math.cos(a),Math.sin(a),1,N[0],N[1],0);
+		data.push(Math.cos(a),Math.sin(a),1,N[0],N[1],0, i/n,1);
+		data.push(Math.cos(a),Math.sin(a),0,N[0],N[1],0, i/n,0);
+		data.push(Math.cos(a+dA),Math.sin(a+dA),0,M[0],M[1],0, (i+1)/n,0);
+		data.push(Math.cos(a+dA),Math.sin(a+dA),1,M[0],M[1],0, (i+1)/n,1);
+		data.push(Math.cos(a+dA),Math.sin(a+dA),0,M[0],M[1],0, (i+1)/n,0);
+		data.push(Math.cos(a),Math.sin(a),1,N[0],N[1],0, i/n,1);
 		a += dA;
 	}
 	
@@ -1116,22 +1165,35 @@ CanonicalCylinder = function(n)
 }
 
 // каноничен цилиндър - метод за рисуване
-CanonicalCylinder.prototype.draw = function(hollow)
+CanonicalCylinder.prototype.draw = function(hollow, texture, texMatrix, texMatrixBase)
 {	
 	gl.bindBuffer(gl.ARRAY_BUFFER,this.buf);
 	// върхове
 	gl.enableVertexAttribArray(aXYZ);
-	gl.vertexAttribPointer(aXYZ,3,gl.FLOAT,false,6*FLOATS,0*FLOATS);
+	gl.vertexAttribPointer(aXYZ,3,gl.FLOAT,false,8*FLOATS,0*FLOATS);
 	// нормали
 	gl.enableVertexAttribArray(aNormal);
-	gl.vertexAttribPointer(aNormal,3,gl.FLOAT,false,6*FLOATS,3*FLOATS);
+	gl.vertexAttribPointer(aNormal,3,gl.FLOAT,false,8*FLOATS,3*FLOATS);
+	// казваме къде са текстурите
+	if (gl.isTexture(texture))
+	{
+		gl.bindTexture(gl.TEXTURE_2D,texture);
+		gl.enableVertexAttribArray(aST);
+		gl.vertexAttribPointer(aST,2,gl.FLOAT,false,8*FLOATS,6*FLOATS);
+	}
+	else
+	{
+		gl.disableVertexAttribArray(aST);
+	}
 	// рисуваме долната и горната основа
 	if (!hollow)
 	{
+		if(this.texture) gl.uniformMatrix3fv(glprog.uTexMatrix,false,texMatrixBase);
 		gl.drawArrays(gl.TRIANGLE_FAN,0,this.n+2);
 		gl.drawArrays(gl.TRIANGLE_FAN,this.n+2,this.n+2);
 	}
 	// рисуваме околните стени
+	if(this.texture) gl.uniformMatrix3fv(glprog.uTexMatrix,false,texMatrix);
 	gl.drawArrays(gl.TRIANGLES,2*this.n+4,6*this.n);
 }
 
@@ -1150,6 +1212,9 @@ Cylinder = function(center,size,height)
 	this.offset = undefined;
 	this.hollow = false;
 	this.rot = undefined;
+	this.texture = undefined; // неизвестна текстура
+	this.texMatrix = new Float32Array([1,0,0,0,1,0,0,0,1]); // текстурна матрица
+	this.texMatrixBase = new Float32Array([1,0,0,0,1,0,0,0,1]); // текстурна матрица на основите
 	// създаваме еднократно канонична призма
 	if (!canonicalCylinder[this.n])
 		canonicalCylinder[this.n] = new CanonicalCylinder(this.n);
@@ -1165,13 +1230,13 @@ Cylinder.prototype.draw = function()
 	{
 		if (this.rot[0]) zRotate(this.rot[0]);	// хоризонтален ъгъл
 		if (this.rot[1]) yRotate(this.rot[1]);	// вертикален ъгъл
-		if (this.rot[2]) xRotate(this.rot[1]);	// вертикален ъгъл
-		if (this.rot[3]) zRotate(this.rot[2]);	// осев ъгъл
+		if (this.rot[2]) xRotate(this.rot[2]);	// вертикален ъгъл
+		if (this.rot[3]) zRotate(this.rot[3]);	// осев ъгъл
 	}
 	scale([this.size,this.size,this.height]);
 	if (this.offset) translate(this.offset); // и отместването
 	useMatrix();
-	canonicalCylinder[this.n].draw(this.hollow);
+	canonicalCylinder[this.n].draw(this.hollow,this.texture,this.texMatrix,this.texMatrixBase);
 	popMatrix();
 }
 
@@ -1233,8 +1298,8 @@ Conoid.prototype.draw = function()
 	{
 		if (this.rot[0]) zRotate(this.rot[0]);	// хоризонтален ъгъл
 		if (this.rot[1]) yRotate(this.rot[1]);	// вертикален ъгъл
-		if (this.rot[2]) xRotate(this.rot[1]);	// вертикален ъгъл
-		if (this.rot[3]) zRotate(this.rot[2]);	// осев ъгъл
+		if (this.rot[2]) xRotate(this.rot[2]);	// вертикален ъгъл
+		if (this.rot[3]) zRotate(this.rot[3]);	// осев ъгъл
 	}
 	scale(this.size);
 	if (this.offset) translate(this.offset); // и отместването
@@ -1258,12 +1323,13 @@ Conoid.prototype.draw = function()
 CanonicalSphere = function(n)
 {	
 	n = 2*Math.floor(n/2);
-	function dataPush(a,b)
-	{	// координати на точка и нормален вектор
+	function dataPush(a,b,s,t)
+	{	// координати на точка и нормален вектор, текстурни координати
 		data.push(
 			Math.cos(a)*Math.cos(b),
 			Math.sin(a)*Math.cos(b),
-			Math.sin(b) );
+			Math.sin(b),
+			s, t );
 	}
 	
 	var data = [];
@@ -1276,8 +1342,8 @@ CanonicalSphere = function(n)
 		var a = 0, dA = 2*Math.PI/n;
 		for (var ai=0; ai<=n; ai++)
 		{
-			dataPush(a,b);
-			dataPush(a,b+dB);
+			dataPush(a,b,ai/n,bi/(n/2));
+			dataPush(a,b+dB,ai/n,(bi+1)/(n/2));
 			a += dA;
 		}
 		b += dB;
@@ -1293,15 +1359,26 @@ CanonicalSphere = function(n)
 }
 
 // канонична сфера - метод за рисуване
-CanonicalSphere.prototype.draw = function()
+CanonicalSphere.prototype.draw = function(texture)
 {	
 	gl.bindBuffer(gl.ARRAY_BUFFER,this.buf);
 	// върхове
 	gl.enableVertexAttribArray(aXYZ);
-	gl.vertexAttribPointer(aXYZ,3,gl.FLOAT,false,3*FLOATS,0*FLOATS);
+	gl.vertexAttribPointer(aXYZ,3,gl.FLOAT,false,5*FLOATS,0*FLOATS);
 	// нормали
 	gl.enableVertexAttribArray(aNormal);
-	gl.vertexAttribPointer(aNormal,3,gl.FLOAT,false,3*FLOATS,0*FLOATS);
+	gl.vertexAttribPointer(aNormal,3,gl.FLOAT,false,5*FLOATS,0*FLOATS);
+	// казваме къде са текстурите
+	if (gl.isTexture(texture))
+	{
+		gl.bindTexture(gl.TEXTURE_2D,texture);
+		gl.enableVertexAttribArray(aST);
+		gl.vertexAttribPointer(aST,2,gl.FLOAT,false,5*FLOATS,3*FLOATS);
+	}
+	else
+	{
+		if (this.texture) gl.disableVertexAttribArray(aST);
+	}
 	// рисуваме n ленти
 	for (var i=0; i<this.n/2; i++)
 		gl.drawArrays(gl.TRIANGLE_STRIP,2*(this.n+1)*i,2*(this.n+1));
@@ -1320,6 +1397,8 @@ Sphere = function(center,size)
 	this.color = [1,0.75,0];
 	this.offset = undefined;
 	this.rot = undefined;
+	this.texture = undefined; // неизвестна текстура
+	this.texMatrix = new Float32Array([1,0,0,0,1,0,0,0,1]); // текстурна матрица
 	// създаваме еднократно канонична сфера
 	if (!canonicalSphere[this.n])
 		canonicalSphere[this.n] = new CanonicalSphere(this.n);
@@ -1335,13 +1414,14 @@ Sphere.prototype.draw = function()
 	{
 		if (this.rot[0]) zRotate(this.rot[0]);	// хоризонтален ъгъл
 		if (this.rot[1]) yRotate(this.rot[1]);	// вертикален ъгъл
-		if (this.rot[2]) xRotate(this.rot[1]);	// вертикален ъгъл
-		if (this.rot[3]) zRotate(this.rot[2]);	// осев ъгъл
+		if (this.rot[2]) xRotate(this.rot[2]);	// вертикален ъгъл
+		if (this.rot[3]) zRotate(this.rot[3]);	// осев ъгъл
 	}
 	scale([this.size,this.size,this.size]);
 	if (this.offset) translate(this.offset); // и отместването
 	useMatrix();
-	canonicalSphere[this.n].draw();
+	if (this.texture) gl.uniformMatrix3fv(glprog.uTexMatrix,false,this.texMatrix);
+	canonicalSphere[this.n].draw(this.texture,this.texMatrix);
 	popMatrix();
 }
 
@@ -1369,18 +1449,18 @@ Spheroid.prototype.draw = function()
 	{
 		if (this.rot[0]) zRotate(this.rot[0]);	// хоризонтален ъгъл
 		if (this.rot[1]) yRotate(this.rot[1]);	// вертикален ъгъл
-		if (this.rot[2]) xRotate(this.rot[1]);	// вертикален ъгъл
-		if (this.rot[3]) zRotate(this.rot[2]);	// осев ъгъл
+		if (this.rot[2]) xRotate(this.rot[2]);	// вертикален ъгъл
+		if (this.rot[3]) zRotate(this.rot[3]);	// осев ъгъл
 	}
 	scale(this.size);
 	if (this.offset) translate(this.offset); // и отместването
 	useMatrix();
 	
-	gl.uniform1i(uUseNormalMatrix,true);
+	gl.uniform1i(glprog.uUseNormalMatrix,true);
 	var nmat = calculateNormalMatrix(multiplyMatrix(glvmat,glmat));
-	gl.uniformMatrix4fv(uNormalMatrix,false,nmat);
+	gl.uniformMatrix4fv(glprog.uNormalMatrix,false,nmat);
 	canonicalSphere[this.n].draw();
-	gl.uniform1i(uUseNormalMatrix,false);
+	gl.uniform1i(glprog.uUseNormalMatrix,false);
 
 	popMatrix();
 }
@@ -1478,8 +1558,8 @@ Icosahedron.prototype.draw = function()
 	{
 		if (this.rot[0]) zRotate(this.rot[0]);	// хоризонтален ъгъл
 		if (this.rot[1]) yRotate(this.rot[1]);	// вертикален ъгъл
-		if (this.rot[2]) xRotate(this.rot[1]);	// вертикален ъгъл
-		if (this.rot[3]) zRotate(this.rot[2]);	// осев ъгъл
+		if (this.rot[2]) xRotate(this.rot[2]);	// вертикален ъгъл
+		if (this.rot[3]) zRotate(this.rot[3]);	// осев ъгъл
 	}
 	scale([this.size,this.size,this.size]);
 	if (this.offset) translate(this.offset); // и отместването
@@ -1611,8 +1691,8 @@ GeodesicSphere.prototype.draw = function()
 	{
 		if (this.rot[0]) zRotate(this.rot[0]);	// хоризонтален ъгъл
 		if (this.rot[1]) yRotate(this.rot[1]);	// вертикален ъгъл
-		if (this.rot[2]) xRotate(this.rot[1]);	// вертикален ъгъл
-		if (this.rot[3]) zRotate(this.rot[2]);	// осев ъгъл
+		if (this.rot[2]) xRotate(this.rot[2]);	// вертикален ъгъл
+		if (this.rot[3]) zRotate(this.rot[3]);	// осев ъгъл
 	}
 	scale([this.size,this.size,this.size]);
 	if (this.offset) translate(this.offset); // и отместването
@@ -1696,17 +1776,17 @@ RotationalSolid.prototype.draw = function()
 	{
 		if (this.rot[0]) zRotate(this.rot[0]);	// хоризонтален ъгъл
 		if (this.rot[1]) yRotate(this.rot[1]);	// вертикален ъгъл
-		if (this.rot[2]) xRotate(this.rot[1]);	// вертикален ъгъл
-		if (this.rot[3]) zRotate(this.rot[2]);	// осев ъгъл
+		if (this.rot[2]) xRotate(this.rot[2]);	// вертикален ъгъл
+		if (this.rot[3]) zRotate(this.rot[3]);	// осев ъгъл
 	}
 	scale(this.size);
 	if (this.offset) translate(this.offset); // и отместването
 	useMatrix();
 
 	// заради мащаба ползваме матрица за нормалите
-	gl.uniform1i(uUseNormalMatrix,true);
+	gl.uniform1i(glprog.uUseNormalMatrix,true);
 	var nmat = calculateNormalMatrix(multiplyMatrix(glvmat,glmat));
-	gl.uniformMatrix4fv(uNormalMatrix,false,nmat);
+	gl.uniformMatrix4fv(glprog.uNormalMatrix,false,nmat);
 
 		gl.bindBuffer(gl.ARRAY_BUFFER,this.buf);
 		// върхове
@@ -1722,7 +1802,7 @@ RotationalSolid.prototype.draw = function()
 			gl.drawArrays(gl.TRIANGLE_STRIP,this.n*i,this.n);
 		}
 		
-	gl.uniform1i(uUseNormalMatrix,false);
+	gl.uniform1i(glprog.uUseNormalMatrix,false);
 
 	popMatrix();
 }
@@ -1752,11 +1832,11 @@ Torus = function(center,size,R,r)
 	}
 		
 	// попълва в буфера връх и нормалният му вектор
-	function dataPush(a,b)
+	function dataPush(a,b,ai,bi)
 	{	
 		var p = vertex(a,b);
 		var n = normal(a,b);
-		data.push(p[0],p[1],p[2],n[0],n[1],n[2]);
+		data.push(p[0],p[1],p[2],n[0],n[1],n[2],ai,bi);
 	}
 	
 	var data = [];
@@ -1774,8 +1854,8 @@ Torus = function(center,size,R,r)
 		for (var ai=0; ai<=TORUS_MAJOR_SIDES; ai++)
 		{
 			var a = ai*dA;
-			dataPush(a,b1);
-			dataPush(a,b2);
+			dataPush(a,b1,ai/TORUS_MAJOR_SIDES,bi/TORUS_MINOR_SIDES);
+			dataPush(a,b2,ai/TORUS_MAJOR_SIDES,(bi+1)/TORUS_MINOR_SIDES);
 		}
 	}
 
@@ -1792,6 +1872,8 @@ Torus = function(center,size,R,r)
 	this.color = [0.5,0.75,1];
 	this.offset = undefined;
 	this.rot = undefined;
+	this.texture = undefined; // неизвестна текстура
+	this.texMatrix = new Float32Array([1,0,0,0,1,0,0,0,1]); // текстурна матрица
 }
 
 // тор - метод за рисуване
@@ -1804,8 +1886,8 @@ Torus.prototype.draw = function()
 	{
 		if (this.rot[0]) zRotate(this.rot[0]);	// хоризонтален ъгъл
 		if (this.rot[1]) yRotate(this.rot[1]);	// вертикален ъгъл
-		if (this.rot[2]) xRotate(this.rot[1]);	// вертикален ъгъл
-		if (this.rot[3]) zRotate(this.rot[2]);	// осев ъгъл
+		if (this.rot[2]) xRotate(this.rot[2]);	// вертикален ъгъл
+		if (this.rot[3]) zRotate(this.rot[3]);	// осев ъгъл
 	}
 	scale([this.size,this.size,this.size]);
 	if (this.offset) translate(this.offset); // и отместването
@@ -1814,10 +1896,22 @@ Torus.prototype.draw = function()
 	gl.bindBuffer(gl.ARRAY_BUFFER,this.buf);
 	// върхове
 	gl.enableVertexAttribArray(aXYZ);
-	gl.vertexAttribPointer(aXYZ,3,gl.FLOAT,false,6*FLOATS,0*FLOATS);
+	gl.vertexAttribPointer(aXYZ,3,gl.FLOAT,false,8*FLOATS,0*FLOATS);
 	// нормали
 	gl.enableVertexAttribArray(aNormal);
-	gl.vertexAttribPointer(aNormal,3,gl.FLOAT,false,6*FLOATS,3*FLOATS);
+	gl.vertexAttribPointer(aNormal,3,gl.FLOAT,false,8*FLOATS,3*FLOATS);
+	// казваме къде са текстурите
+	if (gl.isTexture(this.texture))
+	{
+		gl.bindTexture(gl.TEXTURE_2D,this.texture);
+		gl.enableVertexAttribArray(aST);
+		gl.vertexAttribPointer(aST,2,gl.FLOAT,false,8*FLOATS,6*FLOATS);
+	}
+	else
+	{
+		if (this.texture) gl.disableVertexAttribArray(aST);
+	}
+	if (this.texture) gl.uniformMatrix3fv(glprog.uTexMatrix,false,this.texMatrix);
 	// рисуваме лентите
 	for (var i=0; i<this.l; i++)
 	{
@@ -1826,3 +1920,86 @@ Torus.prototype.draw = function()
 
 	popMatrix();
 }
+
+// функция за създаване на текстурен обект от картинка
+// функцията връща обекта веднага, но той става годна
+// текстура по-късно, след зареждането на картинката
+function loadTexture(url,post)
+{
+	var texture = gl.createTexture();
+	var image = new Image();
+	image.onload = function()
+	{
+		imageLoaded(texture,image);
+		if (post) post(texture);
+	};
+	image.src = url;
+	return texture;
+}
+	
+// функция, която се извиква при зареждането на изображение
+function imageLoaded(texture,image)
+{
+	gl.bindTexture(gl.TEXTURE_2D, texture);
+	gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);
+	gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, image);
+	gl.generateMipmap(gl.TEXTURE_2D);
+	gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+	gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+	gl.bindTexture(gl.TEXTURE_2D, null);
+}
+
+// установява единична текстурна 3D матрица
+function texIdentity()
+{
+	return new Float32Array([1,0,0,0,1,0,0,0,1]);
+}
+
+// транслира текстурна 3D матрица с 2D вектор 
+function texTranslate(m,v)
+{
+	m[6] += m[0]*v[0]+m[3]*v[1];
+	m[7] += m[1]*v[0]+m[4]*v[1];
+}
+
+// мащабира текстурна 3D матрица с 2D вектор 
+function texScale(m,v)
+{
+	m[0] *= v[0];
+	m[1] *= v[0];
+	
+	m[3] *= v[1];
+	m[4] *= v[1];
+}
+
+// върти текстурна 3D матрица на ъгъл в градуси 
+function texRotate(m,a)
+{
+	a = radians(a);
+	var s = Math.sin(a);
+	var c = Math.cos(a);
+	
+	a = m[0]*s+m[3]*c;
+	m[0]=m[0]*c-m[3]*s;
+	m[3]=a;
+	
+	a = m[1]*s+m[4]*c;
+	m[1]=m[1]*c-m[4]*s;
+	m[4]=a;
+}
+
+
+// функция за удобство - връща X координата на миши събитие
+function getX(event)
+{
+	return event.clientX-gl.canvas.offsetLeft-gl.canvas.offsetWidth/2;
+}
+
+// функция за удобство - връща X координата на миши събитие
+function getY(event)
+{
+	return -event.clientY+gl.canvas.offsetTop+gl.canvas.offsetHeight/2;
+}
+
+var time = now();
+function now() { return (new Date()).getTime()/1000; }

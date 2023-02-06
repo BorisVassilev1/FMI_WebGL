@@ -59,7 +59,8 @@ function HSVtoRGB(h, s, v) {
 // скелет - конструктор
 Bird = function()
 {
-	this.position = [0,0,0];	
+	this.position = [0,0,0];
+	this.base = [0,0,0];
 	this.body = new Bone([1,2,1]);
 
 	this.body.body[0].color = [0.7,0.7,0.7];
@@ -89,7 +90,7 @@ Bird.prototype.animate = function(time) {
 	var t = time * 4;
 	var q = time * 4 + PI;
 
-	this.position = [-cos(time / 2), 0, 0.5 + cos(t) * 0.4];
+	this.position = [this.base[0]-cos(time / 2), this.base[1], this.base[2] + 0.5 + cos(t) * 0.4];
 	
 	this.body.rot = [-sin(time / 2) * 30,sin(time / 2) * 30,0,0];
 	this.head.rot = [0,sin(time / 2 + 1) * 30,0,0];
@@ -148,7 +149,7 @@ IKLeg = function(base, target, l1, l2, parentBody) {
 	
 	this.parent = parentBody;
 	this.moveTimer = -1;
-	this.moveInterval = 6;
+	this.moveInterval = 40;
 	this.newTarget = [0,0,0];
 	this.oldTarget = [0,0,0];
 }
@@ -171,7 +172,7 @@ IKLeg.prototype.draw = function() {
 				this.oldTarget[2] * (t) + this.newTarget[2] * (1. - t),
 			]
 
-			this.target[2] += t;
+			this.target[2] += sin(t * PI);
 		// }
 		-- this.moveTimer;
 	}

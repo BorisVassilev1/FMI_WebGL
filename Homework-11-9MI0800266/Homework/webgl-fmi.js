@@ -137,6 +137,14 @@ function getShader(id,type)
 	return shader;
 }
 
+function getTextFile(url) {
+	var fr=new FileReader();
+	fr.onload=function(){
+		console.log(fr.result);
+	}
+			  
+	fr.readAsText(url);
+}
 
 // връща готова програма
 function getProgram(idv,idf)
