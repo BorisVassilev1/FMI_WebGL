@@ -1,12 +1,13 @@
 ﻿// Библиотека WebGL-FMI v0.22.11
+// с промени за проект
 //
 // Работа с контексти и шейдъри
 //		getContext(id)
 //		getShader(id,type)
 //		getProgram(idv,idf)
-//		loadFile(url, onLoad)
-//		getVariables()
-//		activateProgram(prog)
+//		loadFile(url, onLoad) 					<- Ново
+//		getVariables()	
+//		activateProgram(prog)					<- Ново
 //
 // Математически и помощни функции и константи
 //		random(a,b)
@@ -17,7 +18,9 @@
 //		custom(obj,props)
 //
 // Работа с текстури
-//		loadTexture(url,post)
+//		loadTexture(url,post,mag,min)
+// 		texture3D()								<- ново
+//		loadTexture3D(texture,side,url)			<- ново
 //		texIdentity()
 //		texTranslate(m,v)
 //		texScale(m,v)
@@ -29,6 +32,7 @@
 //		scalarProduct(x,y)
 //		vectorPoints(x,y)
 //		multiplyMatrix(a,b)
+//		multiplyVectorMatrix(v,m) 				<- Ново
 //		calculateNormalMatrix(a)
 //
 // Трансформации с матрици
@@ -57,8 +61,10 @@
 //		orthoMatrix(width, height, near, far)
 //		perspMatrix(angle, aspect, near, far)
 //		lookAt(eye, focus, up)
+//		setViewMatrix(mat)							<- Ново
 //		perspective(angle, aspect, near, far)
-//		setProjMatrix(mat)
+//		ortho(width,height,near,far)				<- Ново
+//		setProjMatrix(mat)							<- Ново
 //
 // Графични обекти (класове)
 //		Cube(center,size) <- textured
@@ -74,6 +80,8 @@
 //		GeodesicSphere(center,size)
 //		RotationalSolid(center,size,f)
 //		Torus(center,size,R,r) <- textured
+//		Skybox()									<- Ново
+// 		Plane(center, size)							<- Ново
 //
 // Константи
 //		CONE_SIDES = 32;
@@ -82,7 +90,7 @@
 //		GEODESIC_SIDES = 3;
 //		TORUS_MAJOR_SIDES = 50;
 //		TORUS_MINOR_SIDES = 25;
-
+//		PLANE_FACES = 40;							<- Ново
 
 
 var gl;				// глобален WebGL контекст
@@ -141,6 +149,7 @@ function getShader(id,type)
 	return shader;
 }
 
+// зарежда файл като текст
 function loadFile(url, onLoad) {
 	fetch(url).then(response => response.text()).then(text => {
 		onLoad(text);
@@ -171,6 +180,7 @@ function getProgram(idv, idf)
 	return shaderProgram;
 }
 
+// активира някоя програма
 function activateProgram(prog) {
 	gl.useProgram(prog);
 	glprog = prog;
@@ -178,7 +188,7 @@ function activateProgram(prog) {
 
 
 // намира адресите на всички глобални и атрибутни променливи
-function getVariables(prog = glprog, target = window)
+function getVariables(prog = glprog)
 {
 	for (var i=0; i<gl.getProgramParameter(prog,gl.ACTIVE_UNIFORMS); i++)
 	{
@@ -189,7 +199,6 @@ function getVariables(prog = glprog, target = window)
 	for (var i=0; i<gl.getProgramParameter(prog,gl.ACTIVE_ATTRIBUTES); i++)
 	{
 		var name = gl.getActiveAttrib(prog,i).name;
-		// if(!window[name])
 		window[name] = gl.getAttribLocation(prog,name);
 	}
 }
@@ -268,12 +277,14 @@ function perspective(angle,aspect,near,far)
 	gl.uniformMatrix4fv(glprog.uProjectionMatrix,false,glpmat);
 }
 
+// установява ортографска проекция
 function ortho(width,height,near,far)
 {
 	glpmat = orthoMatrix(width, height,near,far);
 	gl.uniformMatrix4fv(glprog.uProjectionMatrix,false,glpmat);
 }
 
+// фиксира матрица за проекция
 function setProjMatrix(mat) {
 	glpmat = mat;
 	gl.uniformMatrix4fv(glprog.uProjectionMatrix,false,glpmat);
@@ -368,6 +379,16 @@ function multiplyMatrix(a, b) {
 	return out;
 };
 
+// умножава 4x4 матрица с 3-мерен вектор като добавя 1 за четвърта компонента
+// връща 3-мерен вектор
+function multiplyVectorMatrix(v,m, w = 1) {
+	let out = [];
+	out[0] = v[0]*m[0] + v[1]*m[4] + v[2]*m[ 8] + w*m[12];
+	out[1] = v[0]*m[1] + v[1]*m[5] + v[2]*m[ 9] + w*m[13];
+	out[2] = v[0]*m[2] + v[1]*m[6] + v[2]*m[10] + w*m[14];
+	return out;
+}
+
 // създаване на матрица за нормалните вектори,
 // чрез реципрочна стойност и транспозиция
 function calculateNormalMatrix(a) {
@@ -426,6 +447,11 @@ function lookAt(eye,target,up)
 	gl.uniformMatrix4fv(glprog.uViewMatrix,false,glvmat);
 }
 
+// фиксира матрица за изгледа
+function setViewMatrix(mat) {
+	glvmat = mat;
+	gl.uniformMatrix4fv(glprog.uViewMatrix,false,glvmat);
+}
 
 // единична матрица
 function unitMatrix()
@@ -724,16 +750,18 @@ CanonicalCube.prototype.draw = function(texture)
 	// казваме къде са нормалите
 	gl.enableVertexAttribArray(aNormal);
 	gl.vertexAttribPointer(aNormal,3,gl.FLOAT,false,8*FLOATS,3*FLOATS);
+
+	gl.enableVertexAttribArray(aST);
+	gl.vertexAttribPointer(aST,2,gl.FLOAT,false,8*FLOATS,6*FLOATS);
+
 	// казваме къде са текстурите
 	if (gl.isTexture(texture))
 	{
 		gl.bindTexture(gl.TEXTURE_2D,texture);
-		gl.enableVertexAttribArray(aST);
-		gl.vertexAttribPointer(aST,2,gl.FLOAT,false,8*FLOATS,6*FLOATS);
+		gl.uniform1i(glprog.uUseTexture, 1);
 	}
-	else
-	{
-		if (texture) gl.disableVertexAttribArray(aST);
+	else {
+		gl.uniform1i(glprog.uUseTexture, 0);
 	}
 	// рисуваме
 	gl.drawArrays(gl.TRIANGLES,0,36);
@@ -1174,16 +1202,18 @@ CanonicalCylinder.prototype.draw = function(hollow, texture, texMatrix, texMatri
 	// нормали
 	gl.enableVertexAttribArray(aNormal);
 	gl.vertexAttribPointer(aNormal,3,gl.FLOAT,false,8*FLOATS,3*FLOATS);
+
+	gl.enableVertexAttribArray(aST);
+	gl.vertexAttribPointer(aST,2,gl.FLOAT,false,8*FLOATS,6*FLOATS);
+
 	// казваме къде са текстурите
 	if (gl.isTexture(texture))
 	{
 		gl.bindTexture(gl.TEXTURE_2D,texture);
-		gl.enableVertexAttribArray(aST);
-		gl.vertexAttribPointer(aST,2,gl.FLOAT,false,8*FLOATS,6*FLOATS);
+		gl.uniform1i(glprog.uUseTexture, 1);
 	}
-	else
-	{
-		gl.disableVertexAttribArray(aST);
+	else {
+		gl.uniform1i(glprog.uUseTexture, 0);
 	}
 	// рисуваме долната и горната основа
 	if (!hollow)
@@ -1327,8 +1357,8 @@ CanonicalSphere = function(n)
 	{	// координати на точка и нормален вектор, текстурни координати
 		data.push(
 			Math.cos(a)*Math.cos(b),
-			Math.sin(a)*Math.cos(b),
 			Math.sin(b),
+			Math.sin(a)*Math.cos(b),
 			s, t );
 	}
 	
@@ -1368,16 +1398,18 @@ CanonicalSphere.prototype.draw = function(texture)
 	// нормали
 	gl.enableVertexAttribArray(aNormal);
 	gl.vertexAttribPointer(aNormal,3,gl.FLOAT,false,5*FLOATS,0*FLOATS);
+
+	gl.enableVertexAttribArray(aST);
+	gl.vertexAttribPointer(aST,2,gl.FLOAT,false,5*FLOATS,3*FLOATS);
+
 	// казваме къде са текстурите
 	if (gl.isTexture(texture))
 	{
 		gl.bindTexture(gl.TEXTURE_2D,texture);
-		gl.enableVertexAttribArray(aST);
-		gl.vertexAttribPointer(aST,2,gl.FLOAT,false,5*FLOATS,3*FLOATS);
+		gl.uniform1i(glprog.uUseTexture, 1);
 	}
-	else
-	{
-		if (this.texture) gl.disableVertexAttribArray(aST);
+	else {
+		gl.uniform1i(glprog.uUseTexture, 0);
 	}
 	// рисуваме n ленти
 	for (var i=0; i<this.n/2; i++)
@@ -1921,16 +1953,17 @@ Torus.prototype.draw = function()
 	popMatrix();
 }
 
+
 // функция за създаване на текстурен обект от картинка
 // функцията връща обекта веднага, но той става годна
 // текстура по-късно, след зареждането на картинката
-function loadTexture(url,post)
+function loadTexture(url,post, mag = gl.LINEAR, min = gl.LINEAR_MIPMAP_LINEAR)
 {
 	var texture = gl.createTexture();
 	var image = new Image();
 	image.onload = function()
 	{
-		imageLoaded(texture,image);
+		imageLoaded(texture,image, mag, min);
 		if (post) post(texture);
 	};
 	image.src = url;
@@ -1938,16 +1971,219 @@ function loadTexture(url,post)
 }
 	
 // функция, която се извиква при зареждането на изображение
-function imageLoaded(texture,image)
+function imageLoaded(texture,image, mag, min)
 {
 	gl.bindTexture(gl.TEXTURE_2D, texture);
 	gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);
-	gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, image);
+	gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
 	gl.generateMipmap(gl.TEXTURE_2D);
-	gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER,gl.LINEAR);
-	gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+	gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, mag);
+	gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, min);
 	gl.bindTexture(gl.TEXTURE_2D, null);
 }
+
+// небесен куб - конструктор, почти едно към едно преписан от лекцията
+Skybox = function()
+{	
+	// върхове
+	var v = [ [+0.5,-0.5,-0.5], [+0.5,+0.5,-0.5],
+			  [-0.5,+0.5,-0.5], [-0.5,-0.5,-0.5],
+			  [+0.5,-0.5,+0.5], [+0.5,+0.5,+0.5],
+			  [-0.5,+0.5,+0.5], [-0.5,-0.5,+0.5] ];
+	// общ списък на съвпадащи координати на връх и тексел
+	var data = [].concat(
+			  v[0], v[1], v[4], // предна стена
+			  v[4], v[1], v[5],
+			  v[6], v[2], v[7], // задна стена
+			  v[7], v[2], v[3], 
+			  v[5], v[1], v[6], // дясна стена 
+			  v[6], v[1], v[2], 
+			  v[4], v[7], v[0], // лява стена 
+			  v[0], v[7], v[3], 
+			  v[4], v[5], v[7], // горна стена
+			  v[7], v[5], v[6], 
+			  v[0], v[3], v[1], // долна стена 
+			  v[1], v[3], v[2] );
+	var buf = gl.createBuffer();
+	gl.bindBuffer(gl.ARRAY_BUFFER,buf);
+	gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.STATIC_DRAW);
+	this.buf = buf;
+	this.texture = undefined; // неизвестна текстура
+}
+
+// небесен куб - метод за рисуване
+Skybox.prototype.draw = function()
+{	
+	pushMatrix();
+		useMatrix();
+		gl.cullFace(gl.FRONT);
+		gl.bindBuffer(gl.ARRAY_BUFFER,this.buf);
+		gl.enableVertexAttribArray(aXYZ);
+		gl.vertexAttribPointer(aXYZ,3,gl.FLOAT,false,3*FLOATS,0*FLOATS);
+		// казваме къде са текстурите, ако всичките 6 са вече заредени
+		if (gl.isTexture(this.texture) && !this.texture.count)
+		{
+			gl.bindTexture(gl.TEXTURE_CUBE_MAP,this.texture);
+			gl.drawArrays(gl.TRIANGLES,0,36);
+		}
+		gl.cullFace(gl.BACK);
+	popMatrix();
+}
+
+var canonicalPlane = undefined;
+var PLANE_FACES = 40;
+
+// канонична равнина - конструктор
+CanonicalPlane = function(detail = PLANE_FACES) {
+	// общ списък връх-нормала-текстура
+	var data = [];
+	var indices = [];
+
+	for(let i = 0; i < detail + 1; ++ i) {
+		for(let j = 0; j < detail + 1; ++ j) {
+			data.push(
+				j / detail - 0.5,
+				i / detail - 0.5,
+				0,
+				0,
+				0,
+				1,
+				i / detail,
+				j / detail
+			);
+		}
+	}
+	for(let i = 0; i < detail; ++ i) {
+		for(let j = 0; j < detail; ++ j) {
+			// двата триъгълника
+			indices.push(
+				i * (detail + 1) + j,
+				i * (detail + 1) + j + 1,
+				(i + 1) * (detail + 1) + j,
+				i * (detail + 1) + j + 1,
+				(i + 1) * (detail + 1) + j + 1,
+				(i + 1) * (detail + 1) + j
+			);
+		}
+	}
+
+	// локална променлива за инстанцията с WebGL буфер
+	var buf = gl.createBuffer();
+	gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+	gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.STATIC_DRAW);
+	// запомняме буфера в текущата инстанция
+	this.buf = buf;
+
+	var ibuf = gl.createBuffer();
+	gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibuf);
+	gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(indices), gl.STATIC_DRAW);
+	this.ibuf = ibuf;
+
+	this.n = 2 * (detail) * (detail);
+}
+
+// канонична равнина - рисуване
+CanonicalPlane.prototype.draw = function(texture) {
+	// активираме буфера, създаден от конструктора
+	gl.bindBuffer(gl.ARRAY_BUFFER,this.buf);
+	gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.ibuf);
+
+	// казваме къде са координатите
+	gl.enableVertexAttribArray(aXYZ);
+	gl.vertexAttribPointer(aXYZ,3,gl.FLOAT,false,8*FLOATS,0*FLOATS);
+	// казваме къде са нормалите
+	gl.enableVertexAttribArray(aNormal);
+	gl.vertexAttribPointer(aNormal,3,gl.FLOAT,false,8*FLOATS,3*FLOATS);
+
+	gl.enableVertexAttribArray(aST);
+	gl.vertexAttribPointer(aST,2,gl.FLOAT,false,8*FLOATS,6*FLOATS);
+
+	// казваме къде са текстурите
+	if (gl.isTexture(texture))
+	{
+		gl.bindTexture(gl.TEXTURE_2D,texture);
+		gl.uniform1i(glprog.uUseTexture, 1);
+	}
+	else {
+		gl.uniform1i(glprog.uUseTexture, 0);
+	}
+	// рисуваме
+	gl.drawElements(gl.TRIANGLES, this.n * 3, gl.UNSIGNED_SHORT, 0);
+}
+
+// равнина - конструктор - същото като при нормален куб
+Plane = function(center,size)
+{
+	// съхраняваме центъра и размера на куба
+	this.center = center;
+	this.size = size;
+	this.color = [1,0.75,0];
+	this.offset = undefined;
+	this.rot = undefined;
+	this.texture = undefined; // неизвестна текстура
+	this.texMatrix = new Float32Array([1,0,0,0,1,0,0,0,1]); // текстурна матрица
+	// създаваме еднократно канонична инстанция
+	if (!canonicalPlane)
+		canonicalPlane = new CanonicalPlane();
+}
+
+// равнина - рисуване
+Plane.prototype.draw = function()
+{
+	pushMatrix(); // запомняме матрицата
+	gl.vertexAttrib3fv(aColor,this.color); // подаваме цвета
+	translate(this.center); // мястото
+	if (this.rot)
+	{
+		if (this.rot[0]) zRotate(this.rot[0]);	// хоризонтален ъгъл
+		if (this.rot[1]) yRotate(this.rot[1]);	// вертикален ъгъл
+		if (this.rot[2]) xRotate(this.rot[2]);	// вертикален ъгъл
+		if (this.rot[3]) zRotate(this.rot[3]);	// осев ъгъл
+	}
+	scale([this.size,this.size,this.size]); // и размера
+	if (this.offset) translate(this.offset); // и отместването
+	useMatrix();
+	if (this.texture) gl.uniformMatrix3fv(glprog.uTexMatrix,false,this.texMatrix);
+	gl.uniform1f(glprog.uDisplacementScale, this.size); // отместване чрез текстура
+	canonicalPlane.draw(this.texture); // самото рисуване
+	popMatrix(); // възстановяваме матрицата
+}
+
+// създаване на празна кубична текстура
+function texture3D()
+{
+	var texture = gl.createTexture();
+	texture.count = 6;
+	return texture;
+}
+
+// заявка за зареждане на една от 6-те текстури на кубична подтекстура
+function loadTexture3D(texture,side,url)
+{
+	var image = new Image();
+	image.onload = function()
+	{
+		imageLoaded3D(texture,image,side);
+	};
+	image.src = url;
+}
+	
+// функция, която се извиква при зареждането на кубична текстура
+function imageLoaded3D(texture,image,side)
+{
+	gl.bindTexture(gl.TEXTURE_CUBE_MAP, texture);
+	// gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);
+	gl.texImage2D(side, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, image);
+	texture.count--;
+	if (texture.count==0)
+	{
+		gl.generateMipmap(gl.TEXTURE_CUBE_MAP);
+		gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+		gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+	}
+	gl.bindTexture(gl.TEXTURE_CUBE_MAP, null);
+}
+
 
 // установява единична текстурна 3D матрица
 function texIdentity()

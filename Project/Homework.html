@@ -2,18 +2,61 @@
 
 <head>
 	<meta charset="utf-8" />
-	<title>Домашно 8: Пилето</title>
+	<title>Проект</title>
 
 	<script src="webgl-fmi.js"></script>
 	<script src="skeleton.js"></script>
 	<script src="framebuffer.js"></script>
+	<script src="particles.js"></script>
 
 	<script>
-		var shadowFrameBuffer, shadowTexture, shadowDepthTexture, shadowWidth = 1024, shadowHeight = 1024;
-		var width, height;
-		var cameraProj, shadowProj;
-		var lightDir = [0, -1 , 1];
+		// наложиха се промени по библиотеката webgl-fmi.js. 
+		// означил съм новодобавените неща в описанието
+		// има малки промени по текстурираните обекти: 
+		// вече винаги се активира атрибутът с текстурните координати
+		// освен това за да се използват различни шейдъри, вече 
+		// униформените променливи се съхраняват в програмните обекти
 
+		// буфери, текстури и данни за графиката
+		var shadowFrameBuffer, shadowTexture, shadowDepthTexture, shadowWidth = 1024, shadowHeight = 1024;
+		var shadowSize = 60, shadowFar = 100, shadowNear = 1, shadowDist = 40, shadowVMatrix = unitMatrix();
+		var raycastSize = 20, raycastFar = 10, raycastNear = 1, raycastDist = 5, raycastVMatrix = unitMatrix();
+		var cameraVMatrix = unitMatrix();
+		var width, height;
+		var cameraProj, shadowProj, raycastProj;
+		var lightDir = [0, -.5, 1];
+		var spriteTexture, noiseTexture, crosshairTexture, heightTexture, grassTexture, pauseTexture;
+		
+		// графични обекти
+		var particles, sky, robot, ground, screenQuad;
+		var floor = [];
+
+		// звуци
+		var stepSoundSource = "sounds/footstep.mp3";
+		var explosionSound = new Audio("sounds/explosion.mp3");
+		var shootSound = new Audio("sounds/pew.mp3");
+		
+		// други глобални променливи
+		var birds = [];
+		var score = 0;
+		var prevTime = now();
+		var timeFromStart = 0;
+		var prevTimeSet = now();
+		var isPointerLocked = false;
+		var yaw, pitch;
+		var isKeyPressed = [];
+
+		// настройки за играта
+		var birdsCount = 10;
+		var stepsVolume = 0.00; // не е много приятно когато е != 0
+		var shootVolume = 0.05;
+		var explosionVolume = 0.003; // експлозията е МНОГО силнa
+		var displacementStrength = 0.1;
+		var drawDebugInfo = false;
+		var mapSize = 45;
+
+
+		// старт
 		function start() {
 			var canvas = document.getElementById("picasso");
 			canvas.addEventListener('webglcontextlost', function (event) { event.preventDefault(); }, false);
@@ -22,39 +65,63 @@
 			prepareInit();
 		}
 
+		// зареждане на ресурсите, за които трябва да се изчака
 		function prepareInit() {
 			vShader = null;
 			fShader = null;
-			loadFile("shader.vs", (text) => {
+			loadFile("shaders/shader.vs", (text) => {
 				vShader = text;
 				init();
 			});
-			loadFile("shader.fs", (text) => {
+			loadFile("shaders/shader.fs", (text) => {
 				fShader = text;
 				init();
 			});
 			vDepthShader = null;
 			fDepthShader = null;
-			loadFile("depth.vs", (text) => {
+			loadFile("shaders/depth.vs", (text) => {
 				vDepthShader = text;
 				init();
 			});
-			loadFile("depth.fs", (text) => {
+			loadFile("shaders/depth.fs", (text) => {
 				fDepthShader = text;
 				init();
 			});
 			vScreenShader = null;
 			fScreenShader = null;
-			loadFile("screen.vs", (text) => {
+			loadFile("shaders/screen.vs", (text) => {
 				vScreenShader = text;
 				init();
 			});
-			loadFile("screen.fs", (text) => {
+			loadFile("shaders/screen.fs", (text) => {
 				fScreenShader = text;
 				init();
 			});
+			vSpriteShader = null;
+			fSpriteShader = null;
+			loadFile("shaders/sprite.vs", (text) => {
+				vSpriteShader = text;
+				init();
+			});
+			loadFile("shaders/sprite.fs", (text) => {
+				fSpriteShader = text;
+				init();
+			});
+			vSkyShader = null;
+			fSkyShader = null;
+			loadFile("shaders/sky.vs", (text) => {
+				vSkyShader = text;
+				init();
+			});
+			loadFile("shaders/sky.fs", (text) => {
+				fSkyShader = text;
+				init();
+			});
+			setScore();
+			setTime();
 		}
 
+		// проверка дали всички задължителни ресурси са заредени
 		function isReadyForInit() {
 			if (!vShader) return false;
 			if (!fShader) return false;
@@ -62,143 +129,330 @@
 			if (!fDepthShader) return false;
 			if (!vScreenShader) return false;
 			if (!fScreenShader) return false;
+			if (!vSpriteShader) return false;
+			if (!fSpriteShader) return false;
+			if (!vSkyShader) return false;
+			if (!fSkyShader) return false;
 			return true;
 		}
 
+		// инициализация на всичко GL
 		function init() {
 			if (!isReadyForInit()) return;
 
 			gl = getContext("picasso");
 
-			mainProg = getProgram(vShader, fShader);
-			depthProg = getProgram(vDepthShader, fDepthShader);
-			screenProg = getProgram(vScreenShader, fScreenShader);
-			
+			mainProg = getProgram(vShader, fShader);				// основен шейдър за цветно рисуване
+			depthProg = getProgram(vDepthShader, fDepthShader);		// рисува само дълбочината
+			screenProg = getProgram(vScreenShader, fScreenShader);	// рисува двуизмерен обект
+			spriteProg = getProgram(vSpriteShader, fSpriteShader);	// рисува спрайтове, винаги обърнати към камерата
+			skyProg = getProgram(vSkyShader, fSkyShader);			// рисува небето
+
 			getVariables(mainProg);
 			getVariables(depthProg);
 			getVariables(screenProg);
-			
+			getVariables(spriteProg);
+			getVariables(skyProg);
+
+			spriteTexture = loadTexture("textures/particle.png");
+			noiseTexture = loadTexture("textures/noise.jpg");
+			crosshairTexture = loadTexture("textures/crosshair.png", () => 0, gl.NEAREST, gl.NEAREST_MIPMAP_NEAREST);
+			heightTexture = loadTexture("textures/heightmap.png");
+			grassTexture = loadTexture("textures/grass_block_top.png", () => 0, gl.NEAREST, gl.NEAREST_MIPMAP_NEAREST);
+			pauseTexture = loadTexture("textures/pause.png", () => 0, gl.NEAREST, gl.NEAREST_MIPMAP_NEAREST);
+
 			gl.enable(gl.DEPTH_TEST);
+			gl.enable(gl.CULL_FACE);
+			gl.cullFace(gl.BACK);
 			gl.clearColor(1, 1, 1, 1);
-			
+
+			sky = new Skybox();
+
+			sky.texture = texture3D();
+			loadTexture3D(sky.texture, gl.TEXTURE_CUBE_MAP_POSITIVE_X, 'textures/right.jpg');
+			loadTexture3D(sky.texture, gl.TEXTURE_CUBE_MAP_NEGATIVE_X, 'textures/left.jpg');
+			loadTexture3D(sky.texture, gl.TEXTURE_CUBE_MAP_POSITIVE_Y, 'textures/bottom.jpg');
+			loadTexture3D(sky.texture, gl.TEXTURE_CUBE_MAP_NEGATIVE_Y, 'textures/top.jpg');
+			loadTexture3D(sky.texture, gl.TEXTURE_CUBE_MAP_POSITIVE_Z, 'textures/front.jpg');
+			loadTexture3D(sky.texture, gl.TEXTURE_CUBE_MAP_NEGATIVE_Z, 'textures/back.jpg');
+
+			activateProgram(depthProg);
+			gl.uniform1i(depthProg.uHeightTexture, 2);
+			gl.uniform1f(depthProg.uDisplacementStrength, 0.);
+			gl.uniform1f(depthProg.uDisplacementScale, 0.);
+
 			activateProgram(mainProg);
 			identity();
-			perspective(30, gl.canvas.width / gl.canvas.height, 1, 100);
+			perspective(30, gl.canvas.width / gl.canvas.height, 1, 200);
 			cameraProj = glpmat;
-			shadowProj = orthoMatrix(30, 30, 1, 100);
+			shadowProj = orthoMatrix(shadowSize, shadowSize, shadowNear, shadowFar);
+			raycastProj = orthoMatrix(raycastSize, raycastSize, raycastNear, raycastFar);
 
 			gl.uniform1i(mainProg.uUseNormalMatrix, false);
 			gl.uniform3f(mainProg.uDiffuseColor, 1.0, 1.0, 1.0);
 			gl.uniform3f(mainProg.uLightDir, lightDir[0], lightDir[1], lightDir[2]);
 
+			gl.activeTexture(gl.TEXTURE1);
+			gl.bindTexture(gl.TEXTURE_2D, shadowDepthTexture);
+			gl.activeTexture(gl.TEXTURE2);
+			gl.bindTexture(gl.TEXTURE_2D, heightTexture);
+			gl.activeTexture(gl.TEXTURE0);
+
+			gl.uniform1i(mainProg.uShadowTexture, 1);
+			gl.uniform1i(mainProg.uTexture, 0);
+			gl.uniform1i(mainProg.uHeightTexture, 2);
+			gl.uniform1f(mainProg.uDisplacementStrength, 0.);
+			gl.uniform1f(mainProg.uDisplacementScale, 0.);
+
 			width = gl.canvas.width;
 			height = gl.canvas.height;
-			
+
 			shadowDepthTexture = makeDepthTexture(shadowWidth, shadowHeight);
 			shadowTexture = makeColorTexture(shadowWidth, shadowHeight);
-			shadowFrameBuffer = makeFrameBuffer(shadowWidth, shadowHeight, [
+			shadowFrameBuffer = makeFrameBuffer([
 				[gl.COLOR_ATTACHMENT0, shadowTexture],
 				[gl.DEPTH_ATTACHMENT, shadowDepthTexture]
 			]);
 
 			screenQuad = new ScreenQuad();
 
-			setupInput()
+			setupInput();
+			setupScene();
 
-			robot = new Robot();
-
-			bird = new Bird();
-			bird.base = [2,2,2];
-
-			yaw = 0;
-			pitch = Math.PI / 4;
-
-			drawFrame();
+			prevTimeSet = now();
+			update();
 		}
 
 		function now() { return (new Date()).getTime() / 1000; }
 
+		// поставя камерата на място
 		function placeCamera() {
-			yaw = -robot.yaw / 180 * Math.PI;
+			yaw = -robot.rot[2] / 180 * Math.PI;
 			pitch = (90 + robot.pitch) / 180 * Math.PI;
 			if (pitch > Math.PI) pitch = Math.PI;
 			if (pitch < 0) pitch = 0.0001;
 			lookAt([
-				30 * cos(yaw) * sin(pitch) + robot.pos[0],
-				30 * sin(yaw) * sin(pitch) + robot.pos[1],
-				30 * cos(pitch) + robot.pos[2] + 3
+				25 * cos(yaw) * sin(pitch) + robot.pos[0],
+				25 * sin(yaw) * sin(pitch) + robot.pos[1],
+				25 * cos(pitch) + robot.pos[2] + 4.
 			], [
 				robot.pos[0],
 				robot.pos[1],
-				robot.pos[2] + 3
+				robot.pos[2] + 4
 			], [0, 0, 1]);
+			cameraVMatrix = glvmat;
 		}
 
+		// update и drawFrame се изпълняват последователно, отделени са само за прегледност
 		function update() {
 			var time = now();
+			prevTime = time;
 
 			gl.clear(gl.COLOR_BUFFER_BIT + gl.DEPTH_BUFFER_BIT);
 
-			var a = time / 3;
+			if (isPointerLocked) {
+				var a = time / 3;
 
-			bird.animate(time);
+				gl.bindTexture(gl.TEXTURE_2D, shadowTexture);
+				heightPass();
 
-			gl.bindTexture(gl.TEXTURE_2D, shadowTexture);
-			heightPass();
-			gl.bindFramebuffer(gl.FRAMEBUFFER, shadowFrameBuffer);
-			const pixels = new Uint8Array(4);
-			gl.readPixels(
-				Math.floor(shadowWidth / 2), 
-				Math.floor(shadowHeight / 2),
-				1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-			// console.log(pixels[0]);
-			robot.pos[2] = 40 - pixels[0] / 255 * 100;
-			gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+				for (bird of birds) {
+					bird.animate(time);
+				}
 
-			moveRobot();
-			mouseDelta = [0, 0];
+				setProjMatrix(cameraProj);
+				setViewMatrix(cameraVMatrix);
+				activateProgram(mainProg);
+				placeCamera();
+				moveRobot();
+				robot.update();
+				mouseDelta = [0, 0];
+				checkCollisions();
+				particles.update();
+
+				if (birdsCount != 0) {
+					setTime();
+				}
+			}
 
 			drawFrame();
 		}
 
+		// прерисува екрана след направените промени по обектите
 		function drawFrame() {
-			// gl.viewport(0, 0, width, height);
-			// activateProgram(screenProg);
-			// gl.bindTexture(gl.TEXTURE_2D, shadowTexture);
-			// screenQuad.draw();
-
-			shadowPass();
+			gl.activeTexture(gl.TEXTURE1);
 			gl.bindTexture(gl.TEXTURE_2D, shadowDepthTexture);
-
+			gl.activeTexture(gl.TEXTURE2);
+			gl.bindTexture(gl.TEXTURE_2D, heightTexture);
+			gl.activeTexture(gl.TEXTURE0);
 
 			gl.viewport(0, 0, width, height);
-			activateProgram(mainProg);
+			// тук се рисува дълбочината от рейкастовете
+			if (drawDebugInfo)
+				drawTextureOnScreen(shadowDepthTexture, [0.4, 0.8], [0.2, 0.2]);
+
+			// сенки
+			shadowPass();
+
+			// истинско рисуване
+			gl.bindTexture(gl.TEXTURE_2D, shadowDepthTexture);
+			colorPass();
+
+			// рисуваме текстурата за сенки
+			if (drawDebugInfo)
+				drawTextureOnScreen(shadowDepthTexture, [0.8, 0.8], [0.2, 0.2]);
+
+			drawTransparents();
 			
-			var shadowMat = multiplyMatrix(glpmat, glvmat);
-			gl.uniformMatrix4fv(mainProg.uShadowMatrix,false,shadowMat);
+			// двуизмерни обекти върху екрана
+			if (!isPointerLocked) {
+				drawTextureOnScreen(grassTexture, [0, 0], [1,1 * width / height], [0.1, 0.8, 0.1]);
+				drawTextureOnScreen(pauseTexture, [0, 0], [0.8 / width * height, 0.4]);
+			}
+			else drawTextureOnScreen(crosshairTexture, [0, 0], [0.1 / width * height, 0.1]);
 
-			setProjMatrix(cameraProj);
-			placeCamera();
-			drawScene();
-
-			// activateProgram(screenProg);
-			// gl.bindTexture(gl.TEXTURE_2D, shadowDepthTexture);
-			// screenQuad.draw();
-
+			// връщаме основната програма
 			activateProgram(mainProg);
-			requestAnimationFrame(update);
+
+			// текстури - за да няма фиидбек с фреймбуфера после
+			gl.activeTexture(gl.TEXTURE1);
+			gl.bindTexture(gl.TEXTURE_2D, null);
+			gl.activeTexture(gl.TEXTURE2);
+			gl.bindTexture(gl.TEXTURE_2D, null);
+			gl.activeTexture(gl.TEXTURE0);
+			gl.bindTexture(gl.TEXTURE_2D, null);
+
+			// държим 60 фпс макс за да няма голяма разлика между различни машини
+			// ако екранът не поддържа 60 кадъра в секунда, ще върви бавно
+			let timenow = now();
+			let delta = timenow - prevTime;
+			if (delta < 0.033) {
+				setTimeout(() => {
+					requestAnimationFrame(update);
+				}, 16 - 1000 * delta);
+			} else {
+				requestAnimationFrame(update);
+			}
 		}
 
+		// рисува картинка на екрана
+		function drawTextureOnScreen(tex, pos, scale, tint = [1,1,1]) {
+			gl.enable(gl.BLEND);
+			gl.depthFunc(gl.LEQUAL);
+			activateProgram(screenProg);
+			gl.bindTexture(gl.TEXTURE_2D, tex);
+			gl.uniform2f(screenProg.uPosition, pos[0], pos[1]);
+			gl.uniform2f(screenProg.uScale, scale[0], scale[1]);
+			gl.uniform3f(screenProg.uTint, tint[0], tint[1], tint[2]);
+			screenQuad.draw();
+			gl.depthFunc(gl.LESS);
+			gl.disable(gl.BLEND);
+		}
+
+		// проверява за сблъсък между пиле и куршум
+		function checkCollisions() {
+			for (let i = 0; i < birds.length; ++i) {
+				let bird = birds[i];
+				for ([key, bullet] of robot.bullets) {
+					let dist = [
+						bird.position[0] - bullet.position[0],
+						bird.position[1] - bullet.position[1],
+						bird.position[2] - bullet.position[2],
+					]
+					let d = dist[0] * dist[0] + dist[1] * dist[1] + dist[2] * dist[2];
+					if (d < 4.) {
+						makeExplosion(bird.position);
+						birds.splice(i, 1);
+						robot.bullets.delete(key);
+						birdsCount--;
+						score += 1;
+						setScore();
+					}
+				}
+			}
+		}
+
+		// изписва точките на екрана
+		function setScore() {
+			document.getElementById("score").innerText = `Score: ${score}`;
+			if(birdsCount == 0) 
+			document.getElementById("score").innerText += ` YOU WON!!  Ctrl + R to restart`;
+		}
+
+		// следи изминалото време
+		function setTime() {
+			time = now();
+			delta = time - prevTimeSet;
+			timeFromStart += delta;
+			document.getElementById("time").innerText = `Time: ${timeFromStart.toFixed(2)}`;
+			// не е единственото място, където това се променя. при ън-паузиране трябва да се променя
+			prevTimeSet = time;
+		}
+
+		// експлозия
+		function makeExplosion(pos) {
+			for (let i = 0; i < 100; ++i) {
+				let direction = [
+					(Math.random() - 0.5),
+					(Math.random() - 0.5),
+					(Math.random() - 0.5)
+				]
+				particles.emit([
+					pos[0],
+					pos[1],
+					pos[2]
+				], [
+					direction[0] * 10.,
+					direction[1] * 10.,
+					direction[2] * 10.
+				], [
+					0.1, 1.0, 0.2], 50);
+			}
+			explosionSound.volume = explosionVolume;
+			explosionSound.pause();
+			explosionSound.currentTime = 0;
+			explosionSound.play();
+		}
+
+		// рисува само терена
 		function drawTerrain() {
 			for (c of floor) c.draw();
+
+			// теренът си има сила на отместването
+			gl.uniform1f(glprog.uDisplacementStrength, displacementStrength);
+			ground.draw();
+			gl.uniform1f(glprog.uDisplacementStrength, 0.);
 		}
 
+		// рисува цялата сцена
 		function drawScene() {
 			drawTerrain();
 			robot.draw(time);
-			bird.draw();
+			for (bird of birds) {
+				bird.draw();
+			}
+		}
+		
+		// рисува специални ефекти, които се рисуват накрая
+		function drawTransparents() {
+			// рисуваме небето
+			activateProgram(skyProg);
+			identity();
+			useMatrix();
+			setProjMatrix(cameraProj);
+			setViewMatrix(cameraVMatrix);
+			gl.depthFunc(gl.LEQUAL);
+			sky.draw();
+			gl.depthFunc(gl.LESS);
+
+			// рисуваме ефектите
+			activateProgram(spriteProg);
+			setProjMatrix(cameraProj);
+			setViewMatrix(cameraVMatrix);
+			particles.draw();
 		}
 
+		// рисува върху текстурата за сенки
 		function shadowPass() {
 			gl.bindFramebuffer(gl.FRAMEBUFFER, shadowFrameBuffer);
 			gl.viewport(0, 0, shadowWidth, shadowHeight);
@@ -208,16 +462,25 @@
 			activateProgram(depthProg);
 
 			lookAt([
-				robot.pos[0] + lightDir[0] * 40, 
-				robot.pos[1] + lightDir[1] * 40, 
+				robot.pos[0] + lightDir[0] * 40,
+				robot.pos[1] + lightDir[1] * 40,
 				robot.pos[2] + lightDir[2] * 40
-			], robot.pos, [0,0,1]);
+			], robot.pos, [0, 0, 1]);
+			shadowVMatrix = glvmat;
 			setProjMatrix(shadowProj);
+
+			gl.activeTexture(gl.TEXTURE1);
+			gl.bindTexture(gl.TEXTURE_2D, null);
+			gl.activeTexture(gl.TEXTURE2);
+			gl.bindTexture(gl.TEXTURE_2D, heightTexture);
+			gl.activeTexture(gl.TEXTURE0);
+			gl.bindTexture(gl.TEXTURE_2D, null);
 
 			drawScene();
 			gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 		}
 
+		// рисува върху текстурата за рейкастове
 		function heightPass() {
 			gl.bindFramebuffer(gl.FRAMEBUFFER, shadowFrameBuffer);
 			gl.viewport(0, 0, shadowWidth, shadowHeight);
@@ -226,25 +489,92 @@
 
 			activateProgram(depthProg);
 
+			let up = multiplyVectorMatrix([0, 0, 1], robot.matrix, 0);
+
 			lookAt([
-				robot.pos[0], 
-				robot.pos[1], 
-				40], 
-				robot.pos, [0,1,0]);
-			setProjMatrix(shadowProj);
+				robot.pos[0] + up[0] * raycastDist,
+				robot.pos[1] + up[1] * raycastDist,
+				robot.pos[2] + up[2] * raycastDist
+			], [
+				robot.pos[0],
+				robot.pos[1],
+				robot.pos[2]
+			], [0, 1, 0]);
+			raycastVMatrix = glvmat;
+			setProjMatrix(raycastProj);
+
+			gl.activeTexture(gl.TEXTURE1);
+			gl.bindTexture(gl.TEXTURE_2D, null);
+			gl.activeTexture(gl.TEXTURE2);
+			gl.bindTexture(gl.TEXTURE_2D, heightTexture);
+			gl.activeTexture(gl.TEXTURE0);
+			gl.bindTexture(gl.TEXTURE_2D, null);
 
 			drawTerrain();
 			gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 		}
 
+		// рисува нормално цветната картина
+		function colorPass() {
+			gl.viewport(0, 0, width, height);
+			activateProgram(mainProg);
+
+			gl.activeTexture(gl.TEXTURE1);
+			gl.bindTexture(gl.TEXTURE_2D, shadowDepthTexture);
+			gl.activeTexture(gl.TEXTURE2);
+			gl.bindTexture(gl.TEXTURE_2D, heightTexture);
+			gl.activeTexture(gl.TEXTURE0);
+
+			var shadowMat = multiplyMatrix(glpmat, glvmat);
+			gl.uniformMatrix4fv(mainProg.uShadowMatrix, false, shadowMat);
+
+			setProjMatrix(cameraProj);
+			setViewMatrix(cameraVMatrix);
+			gl.bindTexture(gl.TEXTURE_2D, noiseTexture);
+			drawScene();
+		}
+
+		// показва къде лъч с посочено начало и посока "надолу" пресича земята
+		// "надолу" е надолу за играча
+		function raycast(position = [0, 0, 0]) {
+			let projected = multiplyVectorMatrix(position, raycastVMatrix);
+
+			let coords = [
+				Math.floor(((projected[0]) / raycastSize + 0.5) * shadowWidth),
+				Math.floor(((projected[1]) / raycastSize + 0.5) * shadowHeight)
+			];
+
+			gl.bindFramebuffer(gl.FRAMEBUFFER, shadowFrameBuffer);
+			const pixels = new Uint8Array(4);
+			gl.readPixels(
+				coords[0],
+				coords[1],
+				1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+			gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+			let dist = (pixels[0] / 255. * (-raycastNear + raycastFar) + 2 * raycastNear) - 0.5;
+			dist += projected[2];
+
+			let up = multiplyVectorMatrix([0, 0, 1], robot.matrix, 0);
+			return [
+				position[0] - up[0] * dist,
+				position[1] - up[1] * dist,
+				position[2] - up[2] * dist,
+			]
+		}
+
+		// вход от потребителя
 		function setupInput() {
 			isKeyPressed = [];
 			document.addEventListener("keydown", (e) => {
-				isKeyPressed[e.key] = true;
+				isKeyPressed[e.keyCode] = true;
 			});
 
 			document.addEventListener("keyup", (e) => {
-				isKeyPressed[e.key] = false;
+				isKeyPressed[e.keyCode] = false;
+				if (e.keyCode == 32) {
+					robot.shoot();
+				}
 			});
 
 			mousePos = [0, 0];
@@ -254,81 +584,149 @@
 				mouseDelta = [e.movementX, e.movementY];
 			});
 
-			floor = [];
-			for (let i = 0; i < 10; ++i) {
-				for (let j = 0; j < 10; ++j) {
-					floor.push(custom(
-						new Cuboid([i * 5 - 25, j * 5 - 25, -0.5 + 2 * (Math.random() - 0.5)], [5, 5, 1]),
-						{
-							color: [Math.random(), Math.random(), Math.random()]
-						}));
-				}
-			}
 
-			isPointerLocked = false;
 			let canvas = document.getElementById('picasso');
 			canvas.addEventListener('click', lockCursor);
 			document.addEventListener('pointerlockchange', () => isPointerLocked = !isPointerLocked);
 		}
 
-		function moveRobot() {
-			let speed = 0.03;
+		// инициализира всички графични обекти в сцената
+		function setupScene() {
+			let size = Math.round((mapSize+ 5) / 5);
+			let s = Math.floor(size / 2);
+			floor = [];
+			for (let i = 0; i < size; ++i) {
+				for (let j = 0; j < size; ++j) {
+					floor.push(custom(
+						new Cuboid([i * 10 - 10 * s, j * 10 - 10 * s, -0.5 + 6 * (Math.random() - 0.5) - 10], [10, 10, 10]),
+						{
+							color: [Math.random(), Math.random(), Math.random()],
+							offset: [0, 0, 0.5]
+						}));
+				}
+			}
 
-			if (isKeyPressed['ArrowLeft']) {
-				robot.yaw -= 10. * speed;
+			robot = new Robot(noiseTexture);
+			robot.pos = [0, 0, 10];
+			placeCamera();
+
+			particles = new ParticleSystem();
+			particles.texture = spriteTexture;
+
+			for (let i = 0; i < birdsCount; ++i) {
+				birds[i] = new Bird();
+				birds[i].base = [
+					(Math.random() - 0.5) * mapSize,
+					(Math.random() - 0.5) * mapSize,
+					5
+				];
+				birds[i].timeOffset = Math.random() * 10;
 			}
-			if (isKeyPressed['ArrowRight']) {
-				robot.yaw += 10. * speed;
+
+			ground = new Plane([0, 0, -4], 2 * mapSize + 10);
+			ground.color = [0.1, 0.8, 0.1];
+			ground.texture = grassTexture;
+			texScale(ground.texMatrix, [20, 20]);
+
+			yaw = 0;
+			pitch = Math.PI / 4;
+		}
+
+		// движи играча 
+		function moveRobot() {
+			let speed = 0.07;
+
+			if (isKeyPressed[37]) { // left
+				robot.rot[2] -= 10. * speed;
 			}
+			if (isKeyPressed[39]) { // right
+				robot.rot[2] += 10. * speed;
+			}
+			if (isKeyPressed[38]) { // up
+				robot.pitch += 10. * speed;
+			}
+			if (isKeyPressed[40]) { // down
+				robot.pitch -= 10. * speed;
+			}
+
 			if (isPointerLocked) {
-				robot.yaw += mouseDelta[0] * 0.2;
+				robot.rot[2] += mouseDelta[0] * 0.2;
 				robot.pitch += -mouseDelta[1];
 			}
 
-			let r = -robot.yaw / 180 * Math.PI;
-			let forward = [
-				cos(r) * speed, sin(r) * speed
-			];
-			let sideways = [
-				-sin(r) * speed, cos(r) * speed
-			];
+			let r = -robot.rot[2] / 180 * Math.PI;
+			let forward = multiplyVectorMatrix([speed, 0, 0], robot.matrix, 0);
+			let sideways = multiplyVectorMatrix([0, speed, 0], robot.matrix, 0);
 
-			if (isKeyPressed['w']) {
+			if (isKeyPressed[87]) { // w
 				robot.pos[0] -= forward[0];
 				robot.pos[1] -= forward[1];
+				robot.pos[2] -= forward[2];
 			}
-			if (isKeyPressed['s']) {
+			if (isKeyPressed[83]) { // s
 				robot.pos[0] += forward[0];
 				robot.pos[1] += forward[1];
+				robot.pos[2] += forward[2];
 			}
-			if (isKeyPressed['a']) {
+			if (isKeyPressed[65]) { // a
 				robot.pos[0] -= sideways[0];
 				robot.pos[1] -= sideways[1];
+				robot.pos[2] -= sideways[2];
 			}
-			if (isKeyPressed['d']) {
+			if (isKeyPressed[68]) { // d
 				robot.pos[0] += sideways[0];
 				robot.pos[1] += sideways[1];
+				robot.pos[2] += sideways[2];
 			}
+			if (robot.pos[0] > mapSize) robot.pos[0] = mapSize;
+			if (robot.pos[1] > mapSize) robot.pos[1] = mapSize;
+			if (robot.pos[0] < -mapSize) robot.pos[0] = -mapSize;
+			if (robot.pos[1] < -mapSize) robot.pos[1] = -mapSize;
 		}
 
+		// заключва/отключва курсора
 		function lockCursor() {
 			if (isPointerLocked) {
 				document.exitPointerLock();
 			} else {
 				document.getElementById('picasso').requestPointerLock();
+				prevTimeSet = now();
 			}
 		}
 	</script>
 </head>
 
-<body onload="start()">
-	<h2>Домашно 8: Пилето</h2>
+<style>
+	#info {
+		position: absolute;
+		top: 20;
+		right: 10px;
+		width: 30%;
+	}
+</style>
 
+<body onload="start()">
 	<noscript>
 		Искаме JavaScript, но няма!
 	</noscript>
 
-	<canvas id="picasso" width="1000" height="800" style="border: solid;">
+	<h2>
+		<div id="score"></div>
+		<div id="time"></div>
+	</h2>
+
+	<h3>
+		<div id="info">
+			Играчът се контролира с клавишите W,A,S,D, а стрелките завъртат гледната точка. След започване на игра,
+			мишката се използва за въртене на играча. Играта може да бъде паузирана по всяко време чрез кликане с ляв
+			бутон на мишката. При натискане на бутона спейс, играчът стреля в посоката, в която е обърнат. Ако уцели
+			някое от летящите пилета, това произвежда експлозия и увеличава точките на играча. Когато не останат пилета,
+			таймерът спира.
+		</div>
+	</h3>
+
+	<canvas id="picasso" width=800" height="600" style="border: solid;">
 		Искаме canvas, но няма!
 	</canvas>
+
 </body>

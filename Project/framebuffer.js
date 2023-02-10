@@ -1,7 +1,8 @@
+// създаване на празна текстура с цвят
 function makeColorTexture(width, height) {
     let tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, width, height, 0, gl.RGB, gl.UNSIGNED_BYTE, null);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -11,10 +12,11 @@ function makeColorTexture(width, height) {
     return tex;
 }
 
+// създаване на празна текстура за дълбочина
 function makeDepthTexture(width, height) {
     let tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT32F, width, height, 0, gl.DEPTH_COMPONENT, gl.FLOAT, null);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT24, width, height, 0, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -22,9 +24,10 @@ function makeDepthTexture(width, height) {
     gl.bindTexture(gl.TEXTURE_2D, null);
 
     return tex;
-} 
+}
 
-function makeFrameBuffer(width, height, textures) {
+// създаване на фреймбуфер
+function makeFrameBuffer(textures) {
     fb = gl.createFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
     for(const tex of textures) {
@@ -55,12 +58,12 @@ function makeFrameBuffer(width, height, textures) {
     return fb;
 }
 
-// правоъгълник за рисуване на екрана
+// правоъгълник за рисуване на екрана - конструктор
 ScreenQuad = function () {
     let data = [
         -1, -1,
-        -1, 1,
         1, -1,
+        -1, 1,
         1, -1,
         1, 1,
         -1, 1,
@@ -71,10 +74,10 @@ ScreenQuad = function () {
     this.buf = buf;
 }
 
+// правоъгълник за рисуване на екрана - рисуване
 ScreenQuad.prototype.draw = function () {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.buf);
     gl.enableVertexAttribArray(aXYZ);
     gl.vertexAttribPointer(aXYZ, 2, gl.FLOAT, false, 0 * FLOATS, 0 * FLOATS);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
 }
-
